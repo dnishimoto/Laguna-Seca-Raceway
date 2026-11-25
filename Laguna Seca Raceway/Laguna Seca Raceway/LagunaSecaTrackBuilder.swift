@@ -310,6 +310,8 @@ final class LagunaSecaTrackBuilder {
         gantry.addChildNode(banner)
         trackRoot.addChildNode(gantry)
 
+        buildGuideFeatures(in: trackRoot, spline: spline)
+
         scene.rootNode.addChildNode(trackRoot)
     }
 
@@ -395,5 +397,319 @@ final class LagunaSecaTrackBuilder {
         }
 
         return (root, cockpitCamera)
+    }
+}
+
+extension LagunaSecaTrackBuilder.TrackSpline {
+
+    /// Closest point on the centerline polyline (XZ plane). Projects onto segments,
+    /// so the result is smooth between samples.
+    func nearestCenterlinePoint(to worldPos: SIMD3<Float>) -> (point: SIMD3<Float>, tangent: SIMD3<Float>, distance: Float) {
+        var bestPoint = sampledPoints.first ?? .zero
+        var bestTangent = SIMD3<Float>(0, 0, -1)
+        var bestDistSq = Float.greatestFiniteMagnitude
+        let count = sampledPoints.count
+
+        for i in 0..<count {
+            let a = sampledPoints[i]
+            let b = sampledPoints[(i + 1) % count]
+            let abX = b.x - a.x
+            let abZ = b.z - a.z
+            let lenSq = abX * abX + abZ * abZ
+            if lenSq < 0.0001 { continue }
+
+            let t = max(0, min(1, ((worldPos.x - a.x) * abX + (worldPos.z - a.z) * abZ) / lenSq))
+            let p = simd_mix(a, b, SIMD3<Float>(repeating: t))
+            let dx = worldPos.x - p.x
+            let dz = worldPos.z - p.z
+            let distSq = dx * dx + dz * dz
+            if distSq < bestDistSq {
+                bestDistSq = distSq
+                bestPoint = p
+                bestTangent = simd_normalize(SIMD3<Float>(abX, 0, abZ))
+            }
+        }
+        return (bestPoint, bestTangent, sqrt(bestDistSq))
+    }
+
+    /// Centerline position, flat forward direction and right direction at a lap distance.
+    func frame(atDistance distance: Float) -> (position: SIMD3<Float>, forward: SIMD3<Float>, right: SIMD3<Float>) {
+        let position = pointAt(distance: distance)
+        let delta = pointAt(distance: distance + 3) - pointAt(distance: distance - 3)
+        let forward = simd_normalize(SIMD3<Float>(delta.x, 0, delta.z))
+        let right = SIMD3<Float>(-forward.z, 0, forward.x)
+        return (position, forward, right)
+    }
+}
+
+// MARK: - Turn arrows and guide barriers
+
+extension LagunaSecaTrackBuilder {
+
+    /// Guide barriers sit 50 ft (15.24 m) beyond each edge of the asphalt.
+    static let barrierSetback: Float = 50.0 * 0.3048
+    /// Distance from the centerline to each barrier.
+    static let barrierOffset: Float = trackHalfWidth + barrierSetback
+
+    private static let barrierHeight: Float = 1.1
+
+    struct TrackTurn {
+        var startDistance: Float
+        var endDistance: Float
+        var isRight: Bool
+        var totalAngle: Float   // radians, always positive
+    }
+
+    /// Finds the turns from the track geometry itself, so arrows always match the road.
+    static func detectTurns(spline: TrackSpline) -> [TrackTurn] {
+        let step: Float = 2.0
+        let count = Int(spline.totalLength / step)
+        guard count > 12 else { return [] }
+
+        func wrap(_ i: Int) -> Int { (i + count) % count }
+
+        let headings: [Float] = (0..<count).map { i in
+            let f = spline.frame(atDistance: Float(i) * step).forward
+            return atan2(f.x, -f.z)   // increases when turning right
+        }
+
+        // Signed curvature (radians per meter), positive = right
+        let curvature: [Float] = (0..<count).map { i in
+            var d = headings[wrap(i + 3)] - headings[wrap(i - 3)]
+            d = atan2(sin(d), cos(d))
+            return d / (6 * step)
+        }
+
+        let threshold: Float = 1.0 / 160.0
+        var turns: [TrackTurn] = []
+        var i = 0
+        while i < count {
+            guard abs(curvature[i]) > threshold else {
+                i += 1
+                continue
+            }
+            let isRight = curvature[i] > 0
+            var j = i
+            var angle: Float = 0
+            while j < count && abs(curvature[j]) > threshold && (curvature[j] > 0) == isRight {
+                angle += abs(curvature[j]) * step
+                j += 1
+            }
+            let turn = TrackTurn(
+                startDistance: Float(i) * step,
+                endDistance: Float(j - 1) * step,
+                isRight: isRight,
+                totalAngle: angle
+            )
+            if var last = turns.last, last.isRight == isRight, turn.startDistance - last.endDistance <= 20 {
+                last.endDistance = turn.endDistance
+                last.totalAngle += turn.totalAngle
+                turns[turns.count - 1] = last
+            } else {
+                turns.append(turn)
+            }
+            i = j
+        }
+
+        // Ignore gentle kinks under 20 degrees
+        return turns.filter { $0.totalAngle >= 20.0 * .pi / 180.0 }
+    }
+
+    static func buildGuideFeatures(in parent: SCNNode, spline: TrackSpline) {
+        let turns = detectTurns(spline: spline)
+        parent.addChildNode(makeRoadArrows(spline: spline, turns: turns))
+        parent.addChildNode(makeBarriers(spline: spline))
+        parent.addChildNode(makeChevronBoards(spline: spline, turns: turns))
+    }
+
+    // MARK: Road arrows
+
+    private static func makeRoadArrows(spline: TrackSpline, turns: [TrackTurn]) -> SCNNode {
+        var vertices: [SCNVector3] = []
+        var indices: [Int32] = []
+
+        // Arrow outline in (right, forward) meters, drawn bending to the right.
+        let pieces: [[SIMD2<Float>]] = [
+            // Straight shaft, split so it follows hills
+            [SIMD2(-0.45, 0), SIMD2(0.45, 0), SIMD2(0.45, 2), SIMD2(-0.45, 2)],
+            [SIMD2(-0.45, 2), SIMD2(0.45, 2), SIMD2(0.45, 4), SIMD2(-0.45, 4)],
+            // Angled shaft
+            [SIMD2(-0.45, 4), SIMD2(0.45, 4), SIMD2(2.20, 5.75), SIMD2(1.30, 6.65)],
+            // Head
+            [SIMD2(0.76, 7.19), SIMD2(2.74, 5.21), SIMD2(3.31, 7.76)]
+        ]
+
+        func addArrow(at distance: Float, isRight: Bool) {
+            let mirror: Float = isRight ? 1 : -1
+            for piece in pieces {
+                let base = Int32(vertices.count)
+                for corner in piece {
+                    let f = spline.frame(atDistance: distance + corner.y)
+                    let p = f.position + f.right * (corner.x * mirror) + SIMD3<Float>(0, 0.14, 0)
+                    vertices.append(SCNVector3(p))
+                }
+                for k in 1..<(piece.count - 1) {
+                    indices.append(contentsOf: [base, base + Int32(k), base + Int32(k + 1)])
+                }
+            }
+        }
+
+        for turn in turns {
+            // Warning arrows on the approach, skipping any that would sit in another turn
+            for lead: Float in [60, 38, 16] {
+                let d = turn.startDistance - lead
+                let insideOtherTurn = turns.contains { d + 8 >= $0.startDistance && d <= $0.endDistance }
+                if !insideOtherTurn {
+                    addArrow(at: d, isRight: turn.isRight)
+                }
+            }
+            // Arrows through the turn
+            var d = turn.startDistance + 6
+            while d < turn.endDistance - 6 {
+                addArrow(at: d, isRight: turn.isRight)
+                d += 22
+            }
+        }
+
+        let node = makeFlatNode(vertices: vertices, indices: indices, color: .systemYellow)
+        node.name = "TurnArrows"
+        node.castsShadow = false
+        return node
+    }
+
+    // MARK: Guide barriers
+
+    /// Point on one barrier line, or nil where that offset would fold back inside the
+    /// run-off area (inside of tight turns).
+    private static func barrierPoint(spline: TrackSpline, distance: Float, side: Float) -> SIMD3<Float>? {
+        let f = spline.frame(atDistance: distance)
+        let p = f.position + f.right * (side * barrierOffset)
+        let nearest = spline.nearestCenterlinePoint(to: p)
+        return nearest.distance >= barrierOffset - 0.3 ? p : nil
+    }
+
+    private static func makeBarriers(spline: TrackSpline) -> SCNNode {
+        let root = SCNNode()
+        root.name = "GuideBarriers"
+
+        var redVerts: [SCNVector3] = []
+        var redIndices: [Int32] = []
+        var whiteVerts: [SCNVector3] = []
+        var whiteIndices: [Int32] = []
+
+        let step: Float = 2.0
+        let count = Int(ceil(spline.totalLength / step))
+        let up = SIMD3<Float>(0, barrierHeight, 0)
+
+        func addWall(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ verts: inout [SCNVector3], _ idx: inout [Int32]) {
+            let base = Int32(verts.count)
+            verts.append(contentsOf: [SCNVector3(a), SCNVector3(b), SCNVector3(b + up), SCNVector3(a + up)])
+            idx.append(contentsOf: [base, base + 1, base + 2, base, base + 2, base + 3])
+        }
+
+        for side: Float in [-1, 1] {
+            let points: [SIMD3<Float>] = (0..<count).compactMap {
+                barrierPoint(spline: spline, distance: Float($0) * step, side: side)
+            }
+            guard points.count > 1 else { continue }
+
+            var run: Float = 0
+            for i in points.indices {
+                let a = points[i]
+                let b = points[(i + 1) % points.count]
+                let length = simd_distance(a, b)
+                if length > 14 { continue }
+                // Alternate red and white every 6 m so speed and distance are easy to read
+                if Int(run / 6) % 2 == 0 {
+                    addWall(a, b, &redVerts, &redIndices)
+                } else {
+                    addWall(a, b, &whiteVerts, &whiteIndices)
+                }
+                run += length
+            }
+        }
+
+        root.addChildNode(makeFlatNode(vertices: redVerts, indices: redIndices, color: .systemRed))
+        root.addChildNode(makeFlatNode(vertices: whiteVerts, indices: whiteIndices, color: UIColor(white: 0.92, alpha: 1)))
+        return root
+    }
+
+    // MARK: Chevron boards on the outside of each turn
+
+    private static func makeChevronBoards(spline: TrackSpline, turns: [TrackTurn]) -> SCNNode {
+        let root = SCNNode()
+        root.name = "ChevronBoards"
+
+        func makeBoardGeometry(isRight: Bool) -> SCNPlane {
+            let plane = SCNPlane(width: 3.2, height: 1.8)
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.diffuse.contents = chevronImage(isRight: isRight)
+            plane.materials = [material]
+            return plane
+        }
+
+        let rightGeometry = makeBoardGeometry(isRight: true)
+        let leftGeometry = makeBoardGeometry(isRight: false)
+
+        for turn in turns {
+            let outside: Float = turn.isRight ? -1 : 1
+            var d = turn.startDistance - 8
+            while d <= turn.endDistance {
+                defer { d += 14 }
+                guard let base = barrierPoint(spline: spline, distance: d, side: outside) else { continue }
+
+                let f = spline.frame(atDistance: d)
+                let inward = f.right * -outside
+                // Angle each board halfway between the road and oncoming drivers
+                let facing = simd_normalize(inward - f.forward)
+
+                let board = SCNNode(geometry: turn.isRight ? rightGeometry : leftGeometry)
+                board.position = SCNVector3(base + inward * 0.2 + SIMD3<Float>(0, barrierHeight + 0.9, 0))
+                board.eulerAngles = SCNVector3(0, atan2(facing.x, facing.z), 0)
+                board.castsShadow = false
+                root.addChildNode(board)
+            }
+        }
+        return root
+    }
+
+    private static func chevronImage(isRight: Bool) -> UIImage {
+        let size = CGSize(width: 256, height: 144)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.systemYellow.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            UIColor.black.setFill()
+            for offset: CGFloat in [20, 96, 172] {
+                // Right-pointing chevron, mirrored for left turns
+                let outline = [
+                    CGPoint(x: offset, y: 16), CGPoint(x: offset + 30, y: 16),
+                    CGPoint(x: offset + 66, y: 72), CGPoint(x: offset + 30, y: 128),
+                    CGPoint(x: offset, y: 128), CGPoint(x: offset + 36, y: 72)
+                ].map { CGPoint(x: isRight ? $0.x : size.width - $0.x, y: $0.y) }
+
+                let path = UIBezierPath()
+                path.move(to: outline[0])
+                outline.dropFirst().forEach { path.addLine(to: $0) }
+                path.close()
+                path.fill()
+            }
+        }
+    }
+
+    // MARK: Shared mesh helper
+
+    private static func makeFlatNode(vertices: [SCNVector3], indices: [Int32], color: UIColor) -> SCNNode {
+        let geometry = SCNGeometry(
+            sources: [SCNGeometrySource(vertices: vertices)],
+            elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)]
+        )
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = color
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return SCNNode(geometry: geometry)
     }
 }
