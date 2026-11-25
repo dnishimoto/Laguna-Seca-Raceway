@@ -108,6 +108,10 @@ struct OutcomeEvaluationWindow {
 }
 
 struct ThumbInputState {
+    /// 0.0 to +1.0 when sliding left thumb down (turns wheel left)
+    var leftThumbDown: Float = 0
+    /// 0.0 to +1.0 when sliding right thumb down (turns wheel right)
+    var rightThumbDown: Float = 0
     /// -1.0 (full left thumb left) to +1.0 (full left thumb right)
     var leftThumbX: Float = 0
     /// -1.0 (pull down = brake) to +1.0 (push up = slight reverse/tuck)
@@ -118,6 +122,13 @@ struct ThumbInputState {
     var rightThumbSteerAssist: Float = 0
     /// Boost / KERS trigger
     var boostEngaged: Bool = false
+
+    /// +1.0 = full left turn (left thumb down), -1.0 = full right turn (right thumb down)
+    var steeringWheelInput: Float {
+        let downDelta = leftThumbDown - rightThumbDown
+        let combined = abs(downDelta) > 0.01 ? downDelta : leftThumbX
+        return max(-1.0, min(1.0, combined))
+    }
 }
 
 struct RaceCarTelemetry: Identifiable, Equatable {

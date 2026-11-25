@@ -246,86 +246,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         agent.missionQueue = queue
     }
 
-    private func buildPerception(
-        for agent: RaceAgent,
-        trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
-        nearestOpponent: (distance: Float, lateralDelta: Float),
-        allPositions: [SIMD3<Float>],
-        time: TimeInterval
-    ) -> RacePerception {
-        let myPos = SIMD3<Float>(agent.node.position)
-        let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
-
-        var updatedMemory = agent.objectMemory
-        for (idx, otherPos) in allPositions.enumerated() {
-            let otherID = agents[idx].id
-            if otherID == agent.id { continue }
-            let d = simd_distance(myPos, otherPos)
-            if d < 28.0 {
-                updatedMemory[otherID] = TrackedObjectMemoryEntry(
-                    id: otherID,
-                    position: otherPos,
-                    radius: 1.4,
-                    lastSeenTime: time,
-                    verifiedClearCount: 0
-                )
-            }
-        }
-
-        for memID in Array(updatedMemory.keys) {
-            guard var entry = updatedMemory[memID] else { continue }
-            let toEntry = entry.position - myPos
-            let dist = simd_length(SIMD2<Float>(toEntry.x, toEntry.z))
-            if dist > 0.01 {
-                let dir = simd_normalize(SIMD3<Float>(toEntry.x, 0, toEntry.z))
-                let dot = simd_dot(SIMD3<Float>(forward.x, 0, forward.z), dir)
-                let stillPresent = allPositions.contains { simd_distance($0, entry.position) < 2.2 }
-                if dot > 0.75 && dist < 24.0 && !stillPresent {
-                    entry.verifiedClearCount += 1
-                    if entry.verifiedClearCount >= 2 {
-                        updatedMemory.removeValue(forKey: memID)
-                    } else {
-                        updatedMemory[memID] = entry
-                    }
-                }
-            }
-        }
-
-        let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
-        let headingError = wrappedAngle(desiredYaw - agent.heading)
-        let latBand = trackInfo.lateralOffset < -1.5 ? "L" : (trackInfo.lateralOffset > 1.5 ? "R" : "C")
-        let curveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
-        let speedBand = max(0, Int(agent.speed / 6.0))
-        let stateKey = "\(latBand)|\(curveBand)|\(speedBand)"
-
-        return RacePerception(
-            carID: agent.id,
-            role: agent.role,
-            speed: agent.speed,
-            maxSpeed: 24.5,
-            energyReserve: agent.energyReserve,
-            isRecharging: agent.isRecharging,
-            headingError: headingError,
-            lateralOffset: trackInfo.lateralOffset,
-            trackHalfWidth: LagunaSecaTrackBuilder.trackHalfWidth,
-            curvatureAhead: trackInfo.curvature,
-            elevationDropAhead: trackInfo.elevationDeltaAhead,
-            pathDistanceAhead: 24.0,
-            detourActive: abs(trackInfo.lateralOffset) > 2.5 || nearestOpponent.distance < 5.0,
-            progressRate: agent.speed,
-            nearestOpponentDistance: nearestOpponent.distance,
-            nearestOpponentLateralDelta: nearestOpponent.lateralDelta,
-            rememberedObstacleCount: updatedMemory.count,
-            activeMissionPhase: agent.activeMissionPhase,
-            activeSubGoal: agent.activeSubGoal,
-            prescribedAction: agent.missionQueue.first?.prescribedAction,
-            lap: agent.lap,
-            progressInLap: trackInfo.distanceAlong / max(1, spline.totalLength),
-            totalRaceProgress: agent.totalProgress,
-            stateKey: stateKey,
-            timestamp: time
-        )
-    }
+  
 
     private func nearestOpponentInfo(forIndex idx: Int, allPositions: [SIMD3<Float>]) -> (distance: Float, lateralDelta: Float) {
         let me = allPositions[idx]
@@ -342,74 +263,198 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         return (bestDist, bestLat)
     }
 
+    private func buildPerception(
+            for agent: RaceAgent,
+            trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
+            nearestOpponent: (distance: Float, lateralDelta: Float),
+            allPositions: [SIMD3<Float>],
+            time: TimeInterval
+        ) -> RacePerception {
+            let myPos = SIMD3<Float>(agent.node.position)
+            let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
+
+            var updatedMemory = agent.objectMemory
+            for (idx, otherPos) in allPositions.enumerated() {
+                let otherID = agents[idx].id
+                if otherID == agent.id { continue }
+                let d = simd_distance(myPos, otherPos)
+                if d < 36.0 {
+                    updatedMemory[otherID] = TrackedObjectMemoryEntry(
+                        id: otherID,
+                        position: otherPos,
+                        radius: 1.5,
+                        lastSeenTime: time,
+                        verifiedClearCount: 0
+                    )
+                }
+            }
+
+            for memID in Array(updatedMemory.keys) {
+                guard var entry = updatedMemory[memID] else { continue }
+                let toEntry = entry.position - myPos
+                let dist = simd_length(SIMD2<Float>(toEntry.x, toEntry.z))
+                if dist > 0.01 {
+                    let dir = simd_normalize(SIMD3<Float>(toEntry.x, 0, toEntry.z))
+                    let dot = simd_dot(SIMD3<Float>(forward.x, 0, forward.z), dir)
+                    let stillPresent = allPositions.contains { simd_distance($0, entry.position) < 2.5 }
+                    if dot > 0.75 && dist < 32.0 && !stillPresent {
+                        entry.verifiedClearCount += 1
+                        if entry.verifiedClearCount >= 2 {
+                            updatedMemory.removeValue(forKey: memID)
+                        } else {
+                            updatedMemory[memID] = entry
+                        }
+                    }
+                }
+            }
+
+            let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
+            let headingError = wrappedAngle(desiredYaw - agent.heading)
+            let latBand = trackInfo.lateralOffset < -1.8 ? "L" : (trackInfo.lateralOffset > 1.8 ? "R" : "C")
+            let curveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
+            let speedBand = max(0, Int(agent.speed / 12.0))
+            let stateKey = "\(latBand)|\(curveBand)|\(speedBand)"
+
+            return RacePerception(
+                carID: agent.id,
+                role: agent.role,
+                speed: agent.speed,
+                maxSpeed: 64.0,
+                energyReserve: agent.energyReserve,
+                isRecharging: agent.isRecharging,
+                headingError: headingError,
+                lateralOffset: trackInfo.lateralOffset,
+                trackHalfWidth: LagunaSecaTrackBuilder.trackHalfWidth,
+                curvatureAhead: trackInfo.curvature,
+                elevationDropAhead: trackInfo.elevationDeltaAhead,
+                pathDistanceAhead: 120.0,
+                detourActive: abs(trackInfo.lateralOffset) > 3.5 || nearestOpponent.distance < 12.0,
+                progressRate: agent.speed,
+                nearestOpponentDistance: nearestOpponent.distance,
+                nearestOpponentLateralDelta: nearestOpponent.lateralDelta,
+                rememberedObstacleCount: updatedMemory.count,
+                activeMissionPhase: agent.activeMissionPhase,
+                activeSubGoal: agent.activeSubGoal,
+                prescribedAction: agent.missionQueue.first?.prescribedAction,
+                lap: agent.lap,
+                progressInLap: trackInfo.distanceAlong / max(1, spline.totalLength),
+                totalRaceProgress: agent.totalProgress,
+                stateKey: stateKey,
+                timestamp: time
+            )
+        }
+
     private func updateFirstPersonPlayer(
-        agent: inout RaceAgent,
-        trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
-        nearestOpponent: (distance: Float, lateralDelta: Float),
-        dt: Float
-    ) {
-        let steerInput = max(-1, min(1, thumbInput.leftThumbX))
-        let maxSteerRate: Float = 2.35
-        agent.steeringAngle += (steerInput * maxSteerRate - agent.steeringAngle) * min(1, dt * 14)
+            agent: inout RaceAgent,
+            trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
+            nearestOpponent: (distance: Float, lateralDelta: Float),
+            dt: Float
+        ) {
+            // Porsche 911 GT3 (992) chassis parameters (1 unit = 1 meter)
+            let wheelbaseMeters: Float = 2.457
+            let minTurnRadiusMeters: Float = 5.20
+            let maxLockWheelAngleRad: Float = asin(wheelbaseMeters / minTurnRadiusMeters) // ~0.492 rad
 
-        let brakeAmount = max(0, -thumbInput.leftThumbY)
-        let reverseAmount = max(0, thumbInput.leftThumbY)
-        let boostMult: Float = (thumbInput.boostEngaged && agent.energyReserve > 2.0) ? 1.28 : 1.0
+            let rawSteer = max(-1, min(1, thumbInput.leftThumbX + thumbInput.rightThumbSteerAssist * 0.35))
+            let deadzone: Float = 0.055
+            let shapedSteer: Float
+            if abs(rawSteer) <= deadzone {
+                shapedSteer = 0
+            } else {
+                let sign: Float = rawSteer >= 0 ? 1 : -1
+                let mag = (abs(rawSteer) - deadzone) / (1.0 - deadzone)
+                let expo = 0.34 * mag + 0.66 * (mag * mag * mag)
+                shapedSteer = sign * expo
+            }
 
-        let maxForwardSpeed: Float = 28.0 * boostMult
-        let accelRate: Float = 16.0 * boostMult
-        let brakeRate: Float = 24.0
-        let drag: Float = 2.8
+            let targetWheelAngle = shapedSteer * maxLockWheelAngleRad
+            let isUnwinding = abs(targetWheelAngle) < abs(agent.steeringAngle) || (targetWheelAngle * agent.steeringAngle < 0)
+            let steerLerpRate: Float = isUnwinding ? 14.5 : 8.0
+            agent.steeringAngle += (targetWheelAngle - agent.steeringAngle) * min(1, dt * steerLerpRate)
 
-        if thumbInput.rightThumbThrottle > 0.02 {
-            agent.speed += thumbInput.rightThumbThrottle * accelRate * dt
-        } else if reverseAmount > 0.1 && agent.speed < 0.5 {
-            agent.speed -= reverseAmount * 8.0 * dt
-        } else {
-            agent.speed -= agent.speed * drag * dt
+            let throttleAmount = max(0, min(1, thumbInput.rightThumbThrottle))
+            let brakeAmount = max(0, min(1, -thumbInput.leftThumbY))
+            let boostMult: Float = (thumbInput.boostEngaged && agent.energyReserve > 2.0) ? 1.12 : 1.0
+
+            let maxForwardSpeed: Float = 68.0 * boostMult
+            let accelRate: Float = 24.0 * boostMult
+            let brakeRate: Float = 38.0
+
+            let isOffTrack = abs(trackInfo.lateralOffset) > LagunaSecaTrackBuilder.trackHalfWidth
+            let surfaceGrip: Float = isOffTrack ? 0.58 : 1.0
+            let drag: Float = isOffTrack ? 1.35 : 0.24
+
+            if throttleAmount > 0.02 {
+                let targetSpeed = throttleAmount * maxForwardSpeed * (isOffTrack ? 0.72 : 1.0)
+                if agent.speed < targetSpeed {
+                    agent.speed = min(targetSpeed, agent.speed + accelRate * surfaceGrip * dt)
+                } else {
+                    agent.speed -= (agent.speed - targetSpeed) * 1.6 * dt
+                }
+            } else {
+                agent.speed -= agent.speed * drag * dt
+            }
+
+            if brakeAmount > 0.02 {
+                agent.speed = max(-10.0, agent.speed - brakeAmount * brakeRate * surfaceGrip * dt)
+            }
+
+            agent.speed = max(-10.0, min(maxForwardSpeed, agent.speed))
+
+            // Weight transfer: trail-braking loads front tires (+front grip), heavy throttle slightly lightens nose
+            let frontLoadFactor = max(0.84, min(1.22, 1.0 + brakeAmount * 0.16 - throttleAmount * 0.08))
+            let speedRatio = min(1.0, abs(agent.speed) / maxForwardSpeed)
+
+            // GT3 downforce offsets high-speed slip so tires stay planted instead of washing out
+            let highSpeedGripScale = max(0.76, 1.0 - 0.24 * (speedRatio * speedRatio)) * surfaceGrip
+            let yawGain: Float = 0.78 * frontLoadFactor
+
+            let effectiveWheelAngle = agent.steeringAngle * highSpeedGripScale * yawGain
+            let yawRate = (agent.speed / wheelbaseMeters) * tan(effectiveWheelAngle)
+            agent.heading = wrappedAngle(agent.heading - yawRate * dt)
+
+            // Grip-limited lateral slip: keep slip tight so the car tracks where the nose points
+            let maxLateralGripAccel: Float = isOffTrack ? 8.5 : 18.5
+            let rawLateralAccel = abs(agent.speed * yawRate)
+            let gripRatio = rawLateralAccel > 0.001 ? min(1.0, maxLateralGripAccel / rawLateralAccel) : 1.0
+            let clampedSlipAngle = max(-0.07, min(0.07, effectiveWheelAngle * 0.14 * (1.0 - gripRatio * 0.65)))
+            let pathHeading = wrappedAngle(agent.heading - clampedSlipAngle)
+
+            let travelDir = SIMD3<Float>(-sin(pathHeading), 0, -cos(pathHeading))
+            var nextPos = SIMD3<Float>(agent.node.position) + travelDir * agent.speed * dt
+
+            let updatedTrack = spline.closestTrackInfo(to: nextPos)
+            let targetY = updatedTrack.trackCenter.y + 0.06
+            nextPos.y += (targetY - nextPos.y) * min(1, dt * 18)
+
+            let rollAngle = -agent.steeringAngle * (0.04 + 0.05 * speedRatio) * surfaceGrip
+            let pitchAngle = brakeAmount * 0.022 - throttleAmount * 0.012
+            agent.node.position = SCNVector3(nextPos)
+            agent.node.eulerAngles = SCNVector3(pitchAngle, agent.heading, rollAngle)
+
+            if let cam = playerCameraNode {
+                cam.eulerAngles = SCNVector3(
+                    -0.04 + pitchAngle * 0.45,
+                    -agent.steeringAngle * 0.12 + clampedSlipAngle * 0.35,
+                    -rollAngle * 0.4
+                )
+            }
+
+            if thumbInput.boostEngaged {
+                agent.lastActionText = "GT3 Boost"
+            } else if brakeAmount > 0.08 {
+                agent.lastActionText = "Brake (\(Int(brakeAmount * 100))%)"
+            } else if abs(shapedSteer) > 0.06 {
+                let currentRadius = abs(effectiveWheelAngle) > 0.004
+                    ? (wheelbaseMeters / abs(tan(effectiveWheelAngle)))
+                    : 999.0
+                agent.lastActionText = String(format: "Turn R=%.1fm", min(999.0, currentRadius))
+            } else if throttleAmount > 0.08 {
+                agent.lastActionText = "Speed (\(Int(throttleAmount * 100))%)"
+            } else {
+                agent.lastActionText = "Coast"
+            }
         }
-
-        if brakeAmount > 0.02 {
-            agent.speed = max(-6.0, agent.speed - brakeAmount * brakeRate * dt)
-        }
-
-        agent.speed = max(-6.0, min(maxForwardSpeed, agent.speed))
-
-        let speedTurnFactor = min(1.0, max(0.35, abs(agent.speed) / 8.0))
-        let reverseSign: Float = agent.speed >= -0.05 ? 1.0 : -1.0
-        agent.heading = wrappedAngle(agent.heading - agent.steeringAngle * speedTurnFactor * reverseSign * dt)
-
-        if abs(trackInfo.lateralOffset) > LagunaSecaTrackBuilder.trackHalfWidth + 0.3 {
-            agent.speed *= powf(0.55, dt)
-        }
-
-        let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
-        var nextPos = SIMD3<Float>(agent.node.position) + forward * agent.speed * dt
-
-        let updatedTrack = spline.closestTrackInfo(to: nextPos)
-        let targetY = updatedTrack.trackCenter.y + 0.06
-        nextPos.y += (targetY - nextPos.y) * min(1, dt * 16)
-
-        agent.node.position = SCNVector3(nextPos)
-        agent.node.eulerAngles = SCNVector3(0, agent.heading, -agent.steeringAngle * 0.08)
-
-        if let cam = playerCameraNode {
-            cam.eulerAngles = SCNVector3(-0.04, -agent.steeringAngle * 0.16, -agent.steeringAngle * 0.05)
-        }
-
-        if thumbInput.boostEngaged {
-            agent.lastActionText = "Thumb Boost"
-        } else if brakeAmount > 0.25 {
-            agent.lastActionText = "Thumb Brake"
-        } else if abs(steerInput) > 0.15 {
-            agent.lastActionText = steerInput < 0 ? "Thumb Steer L" : "Thumb Steer R"
-        } else if thumbInput.rightThumbThrottle > 0.1 {
-            agent.lastActionText = "Thumb Throttle"
-        } else {
-            agent.lastActionText = "Coast"
-        }
-    }
-
     private func updateCAAgent(
         agent: inout RaceAgent,
         trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
@@ -590,7 +635,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 caLiveCells: a.ca?.liveCellCount ?? 0,
                 dirtyStatesCount: a.ca?.dirtyStateCount ?? 0,
                 lastAction: a.lastActionText,
-                decisionNote: a.ca?.lastDecisionText ?? "Manual thumb input"
+                decisionNote: a.ca?.lastDecisionText ?? "Steering wheel input"
             )
         }
 

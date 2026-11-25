@@ -1,4 +1,3 @@
-
 import SceneKit
 import UIKit
 import simd
@@ -38,9 +37,10 @@ final class LagunaSecaTrackBuilder {
             let t1 = simd_normalize(SIMD3<Float>(p1.x - p0.x, 0, p1.z - p0.z))
             let t2 = simd_normalize(SIMD3<Float>(pNext.x - p1.x, 0, pNext.z - p1.z))
             let crossY = t1.x * t2.z - t1.z * t2.x
-            let curvature = crossY * 4.0
+            let curvature = crossY * 18.0
 
-            let lookAheadDist = (d + 14.0).truncatingRemainder(dividingBy: totalLength)
+            // 75 m look-ahead scaled for 3,602 m circuit
+            let lookAheadDist = (d + 75.0).truncatingRemainder(dividingBy: totalLength)
             let aheadSample = pointAt(distance: lookAheadDist)
             let elevationDeltaAhead = aheadSample.y - pos.y
 
@@ -98,57 +98,87 @@ final class LagunaSecaTrackBuilder {
 
             let tPrev = simd_normalize(SIMD3<Float>(center.x - prevPt.x, 0, center.z - prevPt.z))
             let tNext = simd_normalize(SIMD3<Float>(nextPt.x - center.x, 0, nextPt.z - center.z))
-            let curvature = (tPrev.x * tNext.z - tPrev.z * tNext.x) * 4.0
+            let curvature = (tPrev.x * tNext.z - tPrev.z * tNext.x) * 18.0
 
             let distAlong = cumulativeLengths[bestIdx]
-            let lookAhead = pointAt(distance: (distAlong + 14.0).truncatingRemainder(dividingBy: totalLength))
+            let lookAhead = pointAt(distance: (distAlong + 75.0).truncatingRemainder(dividingBy: totalLength))
             let elevationDeltaAhead = lookAhead.y - center.y
 
             return (distAlong, lateralOffset, center, flatTangent, curvature, elevationDeltaAhead)
         }
     }
 
-    static let trackHalfWidth: Float = 6.2
+    /// Real-world Laguna Seca asphalt width is ~14 m (half-width = 7.0 m)
+    static let trackHalfWidth: Float = 7.0
 
+    /// 1:1 Meter-scale Laguna Seca circuit (~3,602 m lap length, 55 m climb to Corkscrew)
     static func makeLagunaSecaSpline() -> TrackSpline {
-        let controlPoints: [SIMD3<Float>] = [
-            SIMD3<Float>(0,    0.0,  45),
-            SIMD3<Float>(0,    0.0,  10),
-            SIMD3<Float>(-22,  0.4, -18),
-            SIMD3<Float>(-52,  1.2, -10),
-            SIMD3<Float>(-68,  3.8,  18),
-            SIMD3<Float>(-55,  7.5,  48),
-            SIMD3<Float>(-34,  7.8,  62),
-            SIMD3<Float>(-22,  2.2,  56),
-            SIMD3<Float>(-14,  0.6,  78),
-            SIMD3<Float>(24,   0.2,  84),
-            SIMD3<Float>(36,   0.0,  58)
+        // Base control points modeled on actual Laguna Seca geometry (1 unit = 1 meter)
+        let rawPoints: [SIMD3<Float>] = [
+            SIMD3<Float>(   0,  0.0,  340),   // Start / Finish line
+            SIMD3<Float>(   0,  0.5, -180),   // Front straight into Turn 1 crest
+            SIMD3<Float>( -55,  2.5, -340),   // Turn 1 fast left kink
+            SIMD3<Float>(-195,  1.0, -455),   // Turn 2 (Andretti Hairpin) entry
+            SIMD3<Float>(-275,  1.5, -365),   // Turn 2 hairpin apex & exit
+            SIMD3<Float>(-240,  4.0, -170),   // Short chute to Turn 3
+            SIMD3<Float>(-350,  6.5,  -75),   // Turn 3 right-hander
+            SIMD3<Float>(-490,  9.5, -135),   // Straight toward Turn 4
+            SIMD3<Float>(-620, 12.0,  -20),   // Turn 4 right-hander
+            SIMD3<Float>(-645, 16.5,  230),   // Straight to Turn 5
+            SIMD3<Float>(-565, 22.0,  390),   // Turn 5 uphill left-hander
+            SIMD3<Float>(-415, 34.0,  475),   // Rahal Straight climb
+            SIMD3<Float>(-330, 44.0,  615),   // Turn 6 fast uphill left
+            SIMD3<Float>(-210, 52.5,  695),   // Steep climb toward Turn 7
+            SIMD3<Float>(-125, 55.0,  645),   // Turn 7 crest / Corkscrew approach (+55 m peak)
+            SIMD3<Float>( -85, 49.0,  575),   // Turn 8 (Corkscrew left entry)
+            SIMD3<Float>( -35, 37.0,  535),   // Turn 8A (Corkscrew plunge -18 m drop)
+            SIMD3<Float>(  35, 24.5,  615),   // Turn 9 (Rainey Curve fast downhill left)
+            SIMD3<Float>( 195, 11.0,  675),   // Approach to Turn 10
+            SIMD3<Float>( 335,  3.5,  585),   // Turn 10 downhill right-hander
+            SIMD3<Float>( 285,  1.0,  435),   // Straight to Turn 11
+            SIMD3<Float>( 145,  0.0,  455),   // Turn 11 tight hairpin onto main straight
+            SIMD3<Float>(  20,  0.0,  415)    // Final straight alignment
         ]
 
-        var sampled: [SIMD3<Float>] = []
-        let count = controlPoints.count
-        let stepsPerSegment = 24
-
-        for i in 0..<count {
-            let p0 = controlPoints[(i - 1 + count) % count]
-            let p1 = controlPoints[i]
-            let p2 = controlPoints[(i + 1) % count]
-            let p3 = controlPoints[(i + 2) % count]
-
-            for s in 0..<stepsPerSegment {
-                let t = Float(s) / Float(stepsPerSegment)
-                let t2 = t * t
-                let t3 = t2 * t
-
-                let pt = 0.5 * (
-                    (2 * p1) +
-                    (-p0 + p2) * t +
-                    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-                    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-                )
-                sampled.append(pt)
+        func sampleClosedCatmullRom(_ pts: [SIMD3<Float>], steps: Int) -> [SIMD3<Float>] {
+            var result: [SIMD3<Float>] = []
+            let count = pts.count
+            for i in 0..<count {
+                let p0 = pts[(i - 1 + count) % count]
+                let p1 = pts[i]
+                let p2 = pts[(i + 1) % count]
+                let p3 = pts[(i + 2) % count]
+                for s in 0..<steps {
+                    let t = Float(s) / Float(steps)
+                    let t2 = t * t
+                    let t3 = t2 * t
+                    let pt = 0.5 * (
+                        (2 * p1) +
+                        (-p0 + p2) * t +
+                        (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+                        (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+                    )
+                    result.append(pt)
+                }
             }
+            return result
         }
+
+        // Measure unscaled length and normalize XZ to exact 3,602 m official circuit length
+        let initialSample = sampleClosedCatmullRom(rawPoints, steps: 32)
+        var rawLength: Float = 0
+        for i in 1..<initialSample.count {
+            rawLength += simd_distance(initialSample[i - 1], initialSample[i])
+        }
+        rawLength += simd_distance(initialSample.last!, initialSample.first!)
+
+        let targetLength: Float = 3602.0
+        let xzScale = rawLength > 1 ? (targetLength / rawLength) : 1.0
+        let scaledControlPoints = rawPoints.map {
+            SIMD3<Float>($0.x * xzScale, $0.y, $0.z * xzScale)
+        }
+
+        let sampled = sampleClosedCatmullRom(scaledControlPoints, steps: 48)
 
         var lengths: [Float] = [0]
         var total: Float = 0
@@ -160,7 +190,7 @@ final class LagunaSecaTrackBuilder {
         lengths.append(total)
 
         return TrackSpline(
-            controlPoints: controlPoints,
+            controlPoints: scaledControlPoints,
             sampledPoints: sampled,
             cumulativeLengths: lengths,
             totalLength: total
@@ -178,7 +208,7 @@ final class LagunaSecaTrackBuilder {
         ground.materials = [groundMat]
         let groundNode = SCNNode(geometry: ground)
         groundNode.name = "LagunaGround"
-        groundNode.position = SCNVector3(0, -0.25, 0)
+        groundNode.position = SCNVector3(0, -0.35, 0)
         groundNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
         trackRoot.addChildNode(groundNode)
 
@@ -204,7 +234,7 @@ final class LagunaSecaTrackBuilder {
             vertices.append(SCNVector3(leftOuter))
             vertices.append(SCNVector3(rightOuter))
 
-            let curbInnerW = halfW - 0.65
+            let curbInnerW = halfW - 0.85
             leftCurbVerts.append(SCNVector3(curr - right * halfW + SIMD3<Float>(0, 0.11, 0)))
             leftCurbVerts.append(SCNVector3(curr - right * curbInnerW + SIMD3<Float>(0, 0.11, 0)))
 
@@ -258,22 +288,22 @@ final class LagunaSecaTrackBuilder {
         let yaw = atan2(-startSample.tangent.x, -startSample.tangent.z)
         gantry.eulerAngles = SCNVector3(0, yaw, 0)
 
-        let postGeo = SCNBox(width: 0.4, height: 6.5, length: 0.4, chamferRadius: 0.05)
+        let postGeo = SCNBox(width: 0.5, height: 7.5, length: 0.5, chamferRadius: 0.05)
         let postMat = SCNMaterial()
         postMat.diffuse.contents = UIColor.systemYellow
         postGeo.materials = [postMat]
 
         let leftPost = SCNNode(geometry: postGeo)
-        leftPost.position = SCNVector3(-trackHalfWidth - 0.5, 3.25, 0)
+        leftPost.position = SCNVector3(-trackHalfWidth - 0.6, 3.75, 0)
         let rightPost = SCNNode(geometry: postGeo)
-        rightPost.position = SCNVector3(trackHalfWidth + 0.5, 3.25, 0)
+        rightPost.position = SCNVector3(trackHalfWidth + 0.6, 3.75, 0)
 
-        let bannerGeo = SCNBox(width: CGFloat(trackHalfWidth * 2 + 1.4), height: 1.1, length: 0.35, chamferRadius: 0.04)
+        let bannerGeo = SCNBox(width: CGFloat(trackHalfWidth * 2 + 1.7), height: 1.3, length: 0.4, chamferRadius: 0.04)
         let bannerMat = SCNMaterial()
         bannerMat.diffuse.contents = UIColor.systemRed
         bannerGeo.materials = [bannerMat]
         let banner = SCNNode(geometry: bannerGeo)
-        banner.position = SCNVector3(0, 6.2, 0)
+        banner.position = SCNVector3(0, 7.1, 0)
 
         gantry.addChildNode(leftPost)
         gantry.addChildNode(rightPost)
@@ -308,14 +338,15 @@ final class LagunaSecaTrackBuilder {
         tireMat.diffuse.contents = UIColor(red: 0.07, green: 0.07, blue: 0.08, alpha: 1.0)
         tireMat.roughness.contents = 0.85
 
-        let bodyGeo = SCNBox(width: 1.85, height: 0.62, length: 4.1, chamferRadius: 0.14)
+        // Real GT / prototype race car footprint (~4.6 m length, ~1.95 m width)
+        let bodyGeo = SCNBox(width: 1.95, height: 0.62, length: 4.5, chamferRadius: 0.14)
         bodyGeo.materials = [chassisMat]
         let bodyNode = SCNNode(geometry: bodyGeo)
         bodyNode.name = "\(name)_Body"
         bodyNode.position = SCNVector3(0, 0.55, 0)
         root.addChildNode(bodyNode)
 
-        let cabinGeo = SCNBox(width: 1.45, height: 0.45, length: 1.75, chamferRadius: 0.12)
+        let cabinGeo = SCNBox(width: 1.48, height: 0.46, length: 1.85, chamferRadius: 0.12)
         cabinGeo.materials = [cabinMat]
         let cabinNode = SCNNode(geometry: cabinGeo)
         cabinNode.position = SCNVector3(0, 1.02, 0.15)
@@ -324,20 +355,20 @@ final class LagunaSecaTrackBuilder {
         let wingGeo = SCNBox(width: 2.0, height: 0.12, length: 0.55, chamferRadius: 0.02)
         wingGeo.materials = [accentMat]
         let frontWing = SCNNode(geometry: wingGeo)
-        frontWing.position = SCNVector3(0, 0.26, -1.95)
+        frontWing.position = SCNVector3(0, 0.26, -2.15)
         root.addChildNode(frontWing)
 
         let rearWing = SCNNode(geometry: wingGeo)
-        rearWing.position = SCNVector3(0, 1.05, 1.85)
+        rearWing.position = SCNVector3(0, 1.08, 2.05)
         root.addChildNode(rearWing)
 
-        let wheelGeo = SCNCylinder(radius: 0.38, height: 0.34)
+        let wheelGeo = SCNCylinder(radius: 0.36, height: 0.34)
         wheelGeo.materials = [tireMat]
         let wheelOffsets: [SCNVector3] = [
-            SCNVector3(-1.02, 0.38, -1.3),
-            SCNVector3( 1.02, 0.38, -1.3),
-            SCNVector3(-1.02, 0.38,  1.3),
-            SCNVector3( 1.02, 0.38,  1.3)
+            SCNVector3(-1.02, 0.36, -1.45),
+            SCNVector3( 1.02, 0.36, -1.45),
+            SCNVector3(-1.02, 0.36,  1.45),
+            SCNVector3( 1.02, 0.36,  1.45)
         ]
 
         for (idx, offset) in wheelOffsets.enumerated() {
@@ -354,11 +385,11 @@ final class LagunaSecaTrackBuilder {
             frontWing.isHidden = true
             let camNode = SCNNode()
             camNode.name = "FirstPersonDriverCamera"
-            camNode.position = SCNVector3(0, 1.28, 0.1)
+            camNode.position = SCNVector3(0, 1.25, 0.1)
             camNode.camera = SCNCamera()
             camNode.camera?.fieldOfView = 76
-            camNode.camera?.zNear = 0.1
-            camNode.camera?.zFar = 260
+            camNode.camera?.zNear = 0.2
+            camNode.camera?.zFar = 1600
             root.addChildNode(camNode)
             cockpitCamera = camNode
         }
