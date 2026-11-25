@@ -19,10 +19,19 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         var speed: Float = 0
         var heading: Float = 0
         var steeringAngle: Float = 0
+        var energyReserve: Float = 100.0
+        var isRecharging: Bool = false
+        var activeMissionPhase: VehicleMissionPhase = .raceProgression
+        var activeSubGoal: String = "Lap 1 Sprint"
+        var missionQueue: [MissionGoalItem] = []
+        var objectMemory: [String: TrackedObjectMemoryEntry] = [:]
+        var outcomeWindow: OutcomeEvaluationWindow?
+        var sensorTickAccumulator: TimeInterval = 0
+        var caTickAccumulator: TimeInterval = 0
+        var lastPerception: RacePerception?
         var lastActionText: String = "Ready"
         var lastStateKey: String = "init"
         var lastAction: RaceAction = .accelerate
-        var caTickAccumulator: TimeInterval = 0
     }
 
     private weak var scene: SCNScene?
@@ -38,6 +47,8 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     private var lastFrameTime: TimeInterval = 0
     private var lastTelemetryTime: TimeInterval = 0
     private let telemetryInterval: TimeInterval = 0.12
+    private let sensorInterval: TimeInterval = 0.10
+    private let outcomeWindowDuration: TimeInterval = 0.45
 
     var onTelemetryUpdate: (([RaceCarTelemetry], Int, Int) -> Void)?
 
@@ -95,6 +106,14 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agent.lastTrackDistance = cfg.startDist
             agent.totalProgress = cfg.startDist
             agent.heading = yaw
+            agent.outcomeWindow = OutcomeEvaluationWindow(
+                startTime: 0,
+                startPosition: startPos,
+                startTrackDistance: cfg.startDist,
+                startTotalProgress: cfg.startDist,
+                lastStateKey: "init",
+                lastAction: .accelerate
+            )
             agents.append(agent)
         }
     }
@@ -120,9 +139,24 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         let positions = agents.map { SIMD3<Float>($0.node.position) }
 
         for i in agents.indices {
-            let nearest = nearestOpponentInfo(forIndex: i, allPositions: positions)
+            updateEnergyAndGauges(agent: &agents[i], dt: dt)
+            syncMissionQueue(agent: &agents[i])
+
             let currentWorld = SIMD3<Float>(agents[i].node.position)
             let trackInfo = spline.closestTrackInfo(to: currentWorld)
+            let nearest = nearestOpponentInfo(forIndex: i, allPositions: positions)
+
+            agents[i].sensorTickAccumulator += TimeInterval(dt)
+            if agents[i].sensorTickAccumulator >= sensorInterval || agents[i].lastPerception == nil {
+                agents[i].sensorTickAccumulator = 0
+                agents[i].lastPerception = buildPerception(
+                    for: agents[i],
+                    trackInfo: trackInfo,
+                    nearestOpponent: nearest,
+                    allPositions: positions,
+                    time: time
+                )
+            }
 
             let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
             let headingError = wrappedAngle(desiredYaw - agents[i].heading)
@@ -146,6 +180,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             }
 
             updateLapAndProgress(agent: &agents[i], trackInfo: trackInfo)
+            evaluateOutcomeWindow(agent: &agents[i], trackInfo: trackInfo, dt: dt, time: time)
         }
 
         resolveCarToCarSpacing()
@@ -154,6 +189,142 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             lastTelemetryTime = time
             publishTelemetry()
         }
+    }
+
+    private func updateEnergyAndGauges(agent: inout RaceAgent, dt: Float) {
+        let boostDrain: Float = (agent.role == .firstPersonPlayer && thumbInput.boostEngaged) ? 14.0 : 1.4
+        let speedDrain: Float = abs(agent.speed) * 0.08
+        if !agent.isRecharging {
+            agent.energyReserve = max(0, agent.energyReserve - (boostDrain + speedDrain) * dt)
+            if agent.energyReserve < 15.0 {
+                agent.isRecharging = true
+            }
+        } else {
+            agent.energyReserve = min(100.0, agent.energyReserve + 28.0 * dt)
+            if agent.energyReserve >= 98.0 {
+                agent.isRecharging = false
+            }
+        }
+    }
+
+    private func syncMissionQueue(agent: inout RaceAgent) {
+        var queue: [MissionGoalItem] = []
+
+        if agent.isRecharging || agent.energyReserve < 15.0 {
+            agent.activeMissionPhase = .energyReplenish
+            agent.activeSubGoal = "Recharge Reserve (\(Int(agent.energyReserve))%)"
+            queue.append(MissionGoalItem(
+                id: "energy-replenish",
+                phase: .energyReplenish,
+                subGoal: agent.activeSubGoal,
+                targetDistanceAlongTrack: agent.distanceAlongTrack,
+                prescribedAction: .hardBrake
+            ))
+        } else if agent.lap <= totalLaps {
+            agent.activeMissionPhase = .raceProgression
+            agent.activeSubGoal = "Lap \(agent.lap)/\(totalLaps) Sector Push"
+            let nextGate = (agent.distanceAlongTrack + 24.0).truncatingRemainder(dividingBy: spline.totalLength)
+            queue.append(MissionGoalItem(
+                id: "lap-\(agent.lap)-gate",
+                phase: .raceProgression,
+                subGoal: agent.activeSubGoal,
+                targetDistanceAlongTrack: nextGate,
+                prescribedAction: nil
+            ))
+        } else {
+            agent.activeMissionPhase = .completionOrCruise
+            agent.activeSubGoal = "Race Complete • Cool-Down Cruise"
+            queue.append(MissionGoalItem(
+                id: "race-complete",
+                phase: .completionOrCruise,
+                subGoal: agent.activeSubGoal,
+                targetDistanceAlongTrack: nil,
+                prescribedAction: nil
+            ))
+        }
+
+        agent.missionQueue = queue
+    }
+
+    private func buildPerception(
+        for agent: RaceAgent,
+        trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
+        nearestOpponent: (distance: Float, lateralDelta: Float),
+        allPositions: [SIMD3<Float>],
+        time: TimeInterval
+    ) -> RacePerception {
+        let myPos = SIMD3<Float>(agent.node.position)
+        let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
+
+        var updatedMemory = agent.objectMemory
+        for (idx, otherPos) in allPositions.enumerated() {
+            let otherID = agents[idx].id
+            if otherID == agent.id { continue }
+            let d = simd_distance(myPos, otherPos)
+            if d < 28.0 {
+                updatedMemory[otherID] = TrackedObjectMemoryEntry(
+                    id: otherID,
+                    position: otherPos,
+                    radius: 1.4,
+                    lastSeenTime: time,
+                    verifiedClearCount: 0
+                )
+            }
+        }
+
+        for memID in Array(updatedMemory.keys) {
+            guard var entry = updatedMemory[memID] else { continue }
+            let toEntry = entry.position - myPos
+            let dist = simd_length(SIMD2<Float>(toEntry.x, toEntry.z))
+            if dist > 0.01 {
+                let dir = simd_normalize(SIMD3<Float>(toEntry.x, 0, toEntry.z))
+                let dot = simd_dot(SIMD3<Float>(forward.x, 0, forward.z), dir)
+                let stillPresent = allPositions.contains { simd_distance($0, entry.position) < 2.2 }
+                if dot > 0.75 && dist < 24.0 && !stillPresent {
+                    entry.verifiedClearCount += 1
+                    if entry.verifiedClearCount >= 2 {
+                        updatedMemory.removeValue(forKey: memID)
+                    } else {
+                        updatedMemory[memID] = entry
+                    }
+                }
+            }
+        }
+
+        let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
+        let headingError = wrappedAngle(desiredYaw - agent.heading)
+        let latBand = trackInfo.lateralOffset < -1.5 ? "L" : (trackInfo.lateralOffset > 1.5 ? "R" : "C")
+        let curveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
+        let speedBand = max(0, Int(agent.speed / 6.0))
+        let stateKey = "\(latBand)|\(curveBand)|\(speedBand)"
+
+        return RacePerception(
+            carID: agent.id,
+            role: agent.role,
+            speed: agent.speed,
+            maxSpeed: 24.5,
+            energyReserve: agent.energyReserve,
+            isRecharging: agent.isRecharging,
+            headingError: headingError,
+            lateralOffset: trackInfo.lateralOffset,
+            trackHalfWidth: LagunaSecaTrackBuilder.trackHalfWidth,
+            curvatureAhead: trackInfo.curvature,
+            elevationDropAhead: trackInfo.elevationDeltaAhead,
+            pathDistanceAhead: 24.0,
+            detourActive: abs(trackInfo.lateralOffset) > 2.5 || nearestOpponent.distance < 5.0,
+            progressRate: agent.speed,
+            nearestOpponentDistance: nearestOpponent.distance,
+            nearestOpponentLateralDelta: nearestOpponent.lateralDelta,
+            rememberedObstacleCount: updatedMemory.count,
+            activeMissionPhase: agent.activeMissionPhase,
+            activeSubGoal: agent.activeSubGoal,
+            prescribedAction: agent.missionQueue.first?.prescribedAction,
+            lap: agent.lap,
+            progressInLap: trackInfo.distanceAlong / max(1, spline.totalLength),
+            totalRaceProgress: agent.totalProgress,
+            stateKey: stateKey,
+            timestamp: time
+        )
     }
 
     private func nearestOpponentInfo(forIndex idx: Int, allPositions: [SIMD3<Float>]) -> (distance: Float, lateralDelta: Float) {
@@ -183,7 +354,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
         let brakeAmount = max(0, -thumbInput.leftThumbY)
         let reverseAmount = max(0, thumbInput.leftThumbY)
-        let boostMult: Float = thumbInput.boostEngaged ? 1.28 : 1.0
+        let boostMult: Float = (thumbInput.boostEngaged && agent.energyReserve > 2.0) ? 1.28 : 1.0
 
         let maxForwardSpeed: Float = 28.0 * boostMult
         let accelRate: Float = 16.0 * boostMult
@@ -255,63 +426,26 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             ca.step()
         }
 
-        let latBand = trackInfo.lateralOffset < -1.5 ? "L" : (trackInfo.lateralOffset > 1.5 ? "R" : "C")
-        let curveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
-        let stateKey = "\(latBand)|\(curveBand)|\(Int(agent.speed / 6))"
-
-        let perception = RacePerception(
-            carID: agent.id,
-            role: .caAgent,
-            speed: agent.speed,
-            maxSpeed: 24.5,
-            headingError: headingError,
-            lateralOffset: trackInfo.lateralOffset,
-            trackHalfWidth: LagunaSecaTrackBuilder.trackHalfWidth,
-            curvatureAhead: trackInfo.curvature,
-            elevationDropAhead: trackInfo.elevationDeltaAhead,
-            nearestOpponentDistance: nearestOpponent.distance,
-            nearestOpponentLateralDelta: nearestOpponent.lateralDelta,
-            lap: agent.lap,
-            progressInLap: trackInfo.distanceAlong / max(1, spline.totalLength),
-            totalRaceProgress: agent.totalProgress,
-            stateKey: stateKey,
-            timestamp: time
+        let perception = agent.lastPerception ?? buildPerception(
+            for: agent,
+            trackInfo: trackInfo,
+            nearestOpponent: nearestOpponent,
+            allPositions: agents.map { SIMD3<Float>($0.node.position) },
+            time: time
         )
 
-        let action = ca.decideAction(perception: perception)
-
-        var targetSteer: Float = headingError * 1.6
-        var accel: Float = 11.5
-
-        switch action {
-        case .accelerate:
-            accel = 15.0
-        case .hardBrake:
-            accel = -18.0
-        case .steerLeftHard:
-            targetSteer = 0.75
-            accel = 9.0
-        case .steerLeftSoft:
-            targetSteer = 0.35
-            accel = 11.0
-        case .steerRightSoft:
-            targetSteer = -0.35
-            accel = 11.0
-        case .steerRightHard:
-            targetSteer = -0.75
-            accel = 9.0
-        case .apexCut:
-            let insideBias: Float = trackInfo.curvature < 0 ? 0.25 : -0.25
-            targetSteer = headingError * 1.5 + insideBias
-            accel = 12.5
-        case .defendLine:
-            let blockSign: Float = nearestOpponent.lateralDelta >= 0 ? -0.25 : 0.25
-            targetSteer = headingError * 1.4 + blockSign
-            accel = 11.5
-        }
+        let action = ca.decideAction(perception: perception, dt: dt)
+        let targets = ca.controlTargets(
+            for: action,
+            curvatureAhead: trackInfo.curvature,
+            nearestOpponentLateralDelta: nearestOpponent.lateralDelta
+        )
+        let targetSteer: Float = targets.targetSteer + headingError * 1.4
+        let accel: Float = targets.accel
 
         agent.steeringAngle += (max(-0.85, min(0.85, targetSteer)) - agent.steeringAngle) * min(1, dt * 10)
-        agent.speed = max(4.0, min(24.5, agent.speed + (accel - agent.speed * 0.42) * dt))
+        let minAllowedSpeed: Float = agent.isRecharging ? 1.5 : 4.0
+        agent.speed = max(minAllowedSpeed, min(24.5, agent.speed + (accel - agent.speed * 0.42) * dt))
         agent.heading = wrappedAngle(agent.heading + agent.steeringAngle * 1.9 * dt)
 
         let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
@@ -322,14 +456,77 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         agent.node.position = SCNVector3(nextPos)
         agent.node.eulerAngles = SCNVector3(0, agent.heading, -agent.steeringAngle * 0.06)
 
-        let onTrackReward: Float = abs(updatedTrack.lateralOffset) < LagunaSecaTrackBuilder.trackHalfWidth ? 0.5 : -0.8
-        let nextLatBand = updatedTrack.lateralOffset < -1.5 ? "L" : (updatedTrack.lateralOffset > 1.5 ? "R" : "C")
-        let nextState = "\(nextLatBand)|\(curveBand)|\(Int(agent.speed / 6))"
-        ca.learn(fromState: agent.lastStateKey, action: agent.lastAction, reward: onTrackReward, toState: nextState)
-
-        agent.lastStateKey = nextState
+        agent.lastStateKey = perception.stateKey
         agent.lastAction = action
         agent.lastActionText = "CA: \(action)"
+    }
+
+    private func evaluateOutcomeWindow(
+        agent: inout RaceAgent,
+        trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
+        dt: Float,
+        time: TimeInterval
+    ) {
+        let pos = SIMD3<Float>(agent.node.position)
+        let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
+        let err = abs(wrappedAngle(desiredYaw - agent.heading))
+
+        if agent.outcomeWindow == nil {
+            agent.outcomeWindow = OutcomeEvaluationWindow(
+                startTime: time,
+                startPosition: pos,
+                startTrackDistance: trackInfo.distanceAlong,
+                startTotalProgress: agent.totalProgress,
+                lastStateKey: agent.lastStateKey,
+                lastAction: agent.lastAction
+            )
+        }
+
+        guard var win = agent.outcomeWindow else { return }
+        win.headingErrorSum += err
+        win.headingErrorSamples += 1
+        if abs(trackInfo.lateralOffset) > LagunaSecaTrackBuilder.trackHalfWidth {
+            win.offTrackSamples += 1
+        }
+        if agent.speed < 0.8 {
+            win.stallDuration += TimeInterval(dt)
+        }
+
+        let elapsed = time - win.startTime
+        if elapsed >= outcomeWindowDuration {
+            let progressGain = agent.totalProgress - win.startTotalProgress
+            let avgHeadingErr = win.headingErrorSamples > 0 ? win.headingErrorSum / Float(win.headingErrorSamples) : 0
+            let offTrackRatio = win.headingErrorSamples > 0 ? Float(win.offTrackSamples) / Float(win.headingErrorSamples) : 0
+
+            let reward: Float = (progressGain > 0.2 ? 0.6 : -0.3)
+                - avgHeadingErr * 0.5
+                - offTrackRatio * 1.4
+                - (win.stallDuration > 0.25 ? 0.5 : 0)
+
+            let nextLatBand = trackInfo.lateralOffset < -1.5 ? "L" : (trackInfo.lateralOffset > 1.5 ? "R" : "C")
+            let nextCurveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
+            let nextState = "\(nextLatBand)|\(nextCurveBand)|\(max(0, Int(agent.speed / 6.0)))"
+
+            agent.ca?.learn(
+                fromState: win.lastStateKey,
+                action: win.lastAction,
+                reward: reward,
+                toState: nextState,
+                at: time,
+                requireDirty: true
+            )
+
+            agent.outcomeWindow = OutcomeEvaluationWindow(
+                startTime: time,
+                startPosition: pos,
+                startTrackDistance: trackInfo.distanceAlong,
+                startTotalProgress: agent.totalProgress,
+                lastStateKey: agent.lastStateKey,
+                lastAction: agent.lastAction
+            )
+        } else {
+            agent.outcomeWindow = win
+        }
     }
 
     private func updateLapAndProgress(
@@ -352,6 +549,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     }
 
     private func resolveCarToCarSpacing() {
+        guard agents.count >= 2 else { return }
         let minSep: Float = 2.35
         for i in 0..<agents.count {
             for j in (i + 1)..<agents.count {
@@ -364,6 +562,8 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                     let dir = simd_normalize(SIMD3<Float>(delta.x, 0, delta.z))
                     agents[i].node.position = SCNVector3(pA - dir * overlap)
                     agents[j].node.position = SCNVector3(pB + dir * overlap)
+                    agents[i].outcomeWindow?.collisionEvents += 1
+                    agents[j].outcomeWindow?.collisionEvents += 1
                 }
             }
         }
@@ -384,18 +584,23 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 lap: min(totalLaps, a.lap),
                 positionRank: rankMap[a.id] ?? 1,
                 speedKmh: Int(abs(a.speed) * 3.6),
+                energyPercent: Int(a.energyReserve.rounded()),
+                missionPhase: a.activeMissionPhase.rawValue,
                 caGeneration: a.ca?.generation ?? 0,
                 caLiveCells: a.ca?.liveCellCount ?? 0,
-                lastAction: a.lastActionText
+                dirtyStatesCount: a.ca?.dirtyStateCount ?? 0,
+                lastAction: a.lastActionText,
+                decisionNote: a.ca?.lastDecisionText ?? "Manual thumb input"
             )
         }
 
         let leadCA = agents.first(where: { $0.role == .caAgent })?.ca
         let gen = leadCA?.generation ?? 0
         let live = leadCA?.liveCellCount ?? 0
+        let callback = onTelemetryUpdate
 
-        DispatchQueue.main.async { [weak self] in
-            self?.onTelemetryUpdate?(items, gen, live)
+        DispatchQueue.main.async {
+            callback?(items, gen, live)
         }
     }
 
