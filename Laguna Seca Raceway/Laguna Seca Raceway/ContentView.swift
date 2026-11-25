@@ -2,6 +2,7 @@ import SwiftUI
 import SceneKit
 import simd
 
+
 struct ContentView: View {
     @State private var thumbInput = ThumbInputState()
     @State private var animationSpeed: Double = 1.0
@@ -9,7 +10,6 @@ struct ContentView: View {
     @State private var telemetry: [RaceCarTelemetry] = []
     @State private var caGeneration: Int = 0
     @State private var caLiveCells: Int = 0
-    @State private var elapsedTime: TimeInterval = 0
 
     var body: some View {
         ZStack {
@@ -19,24 +19,16 @@ struct ContentView: View {
                 resetCounter: $resetCounter,
                 telemetry: $telemetry,
                 caGeneration: $caGeneration,
-                caLiveCells: $caLiveCells,
-                elapsedTime: $elapsedTime
+                caLiveCells: $caLiveCells
             )
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("LAGUNA SECA • 1ST PERSON CA RACE")
-                                .font(.caption.bold())
-                                .foregroundStyle(.white)
-                            Spacer(minLength: 8)
-                            Text(formattedElapsedTime(elapsedTime))
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.cyan)
-                        }
-
+                        Text("LAGUNA SECA • 1ST PERSON CA RACE")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
                         ForEach(telemetry) { car in
                             HStack(spacing: 6) {
                                 Text("P\(car.positionRank)")
@@ -45,20 +37,15 @@ struct ContentView: View {
                                 Text(car.name)
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(.white)
-                                    .lineLimit(1)
-                                Spacer(minLength: 6)
-                                Text("L\(car.lap)/\(car.totalLaps)")
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(.green)
-                                Text("\(car.speedMph) mph")
+                                Spacer(minLength: 8)
+                                Text("\(car.speedKmh) km/h")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.85))
-                                    .frame(width: 52, alignment: .trailing)
                             }
                         }
                     }
                     .padding(10)
-                    .frame(maxWidth: 295)
+                    .frame(maxWidth: 250)
                     .background(.black.opacity(0.55))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
@@ -112,7 +99,7 @@ struct ContentView: View {
                         SteeringWheelNavView(wheelSteer: $thumbInput.leftThumbX)
 
                         if let player = telemetry.first(where: { $0.role == .firstPersonPlayer }) {
-                            Text("\(player.speedMph) MPH")
+                            Text("\(player.speedKmh) KM/H")
                                 .font(.headline.monospacedDigit())
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 10)
@@ -140,13 +127,5 @@ struct ContentView: View {
                 .padding(.bottom, 16)
             }
         }
-    }
-
-    private func formattedElapsedTime(_ seconds: TimeInterval) -> String {
-        let totalTenths = Int((max(0, seconds) * 10).rounded(.down))
-        let minutes = totalTenths / 600
-        let secs = (totalTenths / 10) % 60
-        let tenths = totalTenths % 10
-        return String(format: "%02d:%02d.%d", minutes, secs, tenths)
     }
 }
