@@ -17,6 +17,13 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         var lap: Int = 1
         var totalProgress: Float = 0
         var speed: Float = 0
+        var bounceVelocity: SIMD3<Float> = .zero   // knockback from guard rails
+        var avoidOffset: Float = 0                 // planned shift off the racing line
+        var caLineNudge: Float = 0                 // small line preference from the CA
+        var driverView = DriverView()
+        var driverPlanNote: String = "Racing line"
+        var plannedSpeedLimit: Float = .greatestFiniteMagnitude
+        var skill: Float = 1.0                     // fraction of the ideal speed
         var heading: Float = 0
         var steeringAngle: Float = 0
         var energyReserve: Float = 100.0
@@ -38,11 +45,16 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     private(set) var spline: LagunaSecaTrackBuilder.TrackSpline
     private(set) var agents: [RaceAgent] = []
     private weak var playerCameraNode: SCNNode?
+    private let racingLine: LagunaSecaRacingLine
 
     var thumbInput = ThumbInputState()
     var animationSpeed: Double = 1.0
     var isRunning: Bool = true
     var totalLaps: Int = 3
+
+    // Reset is requested on the main thread but carried out on the render thread
+    private let resetLock = NSLock()
+    private var resetRequested = false
 
     private var lastFrameTime: TimeInterval = 0
     private var lastTelemetryTime: TimeInterval = 0
@@ -55,7 +67,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     init(scene: SCNScene, spline: LagunaSecaTrackBuilder.TrackSpline) {
         self.scene = scene
         self.spline = spline
+        self.racingLine = LagunaSecaRacingLine(spline: spline)
         super.init()
+        scene.rootNode.addChildNode(racingLine.makeNode())
         setupCars(in: scene)
     }
 
@@ -106,6 +120,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agent.lastTrackDistance = cfg.startDist
             agent.totalProgress = cfg.startDist
             agent.heading = yaw
+            agent.skill = cfg.caSeed.map { 1.0 - Float($0 - 1) * 0.03 } ?? 1.0
             agent.outcomeWindow = OutcomeEvaluationWindow(
                 startTime: 0,
                 startPosition: startPos,
@@ -118,14 +133,30 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         }
     }
 
+    /// Safe to call from the main thread. The cars are rebuilt at the start of the next
+    /// frame, so `agents` is never replaced while a frame is still using it.
     func resetRace() {
-        lastFrameTime = 0
-        lastTelemetryTime = 0
-        guard let scene else { return }
-        setupCars(in: scene)
+        resetLock.lock()
+        resetRequested = true
+        resetLock.unlock()
+    }
+
+    private func takeResetRequest() -> Bool {
+        resetLock.lock()
+        defer { resetLock.unlock() }
+        let requested = resetRequested
+        resetRequested = false
+        return requested
     }
 
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        if takeResetRequest(), let scene {
+            lastFrameTime = 0
+            lastTelemetryTime = 0
+            setupCars(in: scene)
+            renderer.pointOfView = playerCameraNode
+        }
+
         guard isRunning, let scene else { return }
         scene.physicsWorld.speed = CGFloat(animationSpeed)
 
@@ -149,17 +180,19 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agents[i].sensorTickAccumulator += TimeInterval(dt)
             if agents[i].sensorTickAccumulator >= sensorInterval || agents[i].lastPerception == nil {
                 agents[i].sensorTickAccumulator = 0
-                agents[i].lastPerception = buildPerception(
+                var perception = buildPerception(
                     for: agents[i],
                     trackInfo: trackInfo,
                     nearestOpponent: nearest,
                     allPositions: positions,
                     time: time
                 )
+                if agents[i].role == .caAgent {
+                    lookAndPlan(index: i, positions: positions)
+                    applyDriverView(agents[i], to: &perception)
+                }
+                agents[i].lastPerception = perception
             }
-
-            let desiredYaw = atan2(-trackInfo.tangent.x, -trackInfo.tangent.z)
-            let headingError = wrappedAngle(desiredYaw - agents[i].heading)
 
             if agents[i].role == .firstPersonPlayer {
                 updateFirstPersonPlayer(
@@ -169,14 +202,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                     dt: dt
                 )
             } else {
-                updateCAAgent(
-                    agent: &agents[i],
-                    trackInfo: trackInfo,
-                    headingError: headingError,
-                    nearestOpponent: nearest,
-                    dt: dt,
-                    time: time
-                )
+                updateCAAgent(agent: &agents[i], dt: dt)
             }
 
             updateLapAndProgress(agent: &agents[i], trackInfo: trackInfo)
@@ -422,6 +448,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
             let travelDir = SIMD3<Float>(-sin(pathHeading), 0, -cos(pathHeading))
             var nextPos = SIMD3<Float>(agent.node.position) + travelDir * agent.speed * dt
+            let hitRail = applyGuardRail(agent: &agent, position: &nextPos, dt: dt)
 
             let updatedTrack = spline.closestTrackInfo(to: nextPos)
             let targetY = updatedTrack.trackCenter.y + 0.06
@@ -454,16 +481,15 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             } else {
                 agent.lastActionText = "Coast"
             }
+            if hitRail || simd_length(agent.bounceVelocity) > 1.0 {
+                agent.lastActionText = "Guard Rail Bounce"
+            }
         }
-    private func updateCAAgent(
-        agent: inout RaceAgent,
-        trackInfo: (distanceAlong: Float, lateralOffset: Float, trackCenter: SIMD3<Float>, tangent: SIMD3<Float>, curvature: Float, elevationDeltaAhead: Float),
-        headingError: Float,
-        nearestOpponent: (distance: Float, lateralDelta: Float),
-        dt: Float,
-        time: TimeInterval
-    ) {
-        guard let ca = agent.ca else { return }
+    /// `agent` is an inout reference into `agents`, so nothing in here (or in anything
+    /// it calls) may read `self.agents`. Doing so is an exclusivity violation that crashes.
+    private func updateCAAgent(agent: inout RaceAgent, dt: Float) {
+        // Perception is built by the render loop before this call; skip the frame if missing
+        guard let ca = agent.ca, let perception = agent.lastPerception else { return }
 
         agent.caTickAccumulator += TimeInterval(dt)
         if agent.caTickAccumulator >= 0.18 {
@@ -471,39 +497,188 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             ca.step()
         }
 
-        let perception = agent.lastPerception ?? buildPerception(
-            for: agent,
-            trackInfo: trackInfo,
-            nearestOpponent: nearestOpponent,
-            allPositions: agents.map { SIMD3<Float>($0.node.position) },
-            time: time
-        )
-
         let action = ca.decideAction(perception: perception, dt: dt)
-        let targets = ca.controlTargets(
-            for: action,
-            curvatureAhead: trackInfo.curvature,
-            nearestOpponentLateralDelta: nearestOpponent.lateralDelta
-        )
-        let targetSteer: Float = targets.targetSteer + headingError * 1.4
-        let accel: Float = targets.accel
-
-        agent.steeringAngle += (max(-0.85, min(0.85, targetSteer)) - agent.steeringAngle) * min(1, dt * 10)
-        let minAllowedSpeed: Float = agent.isRecharging ? 1.5 : 4.0
-        agent.speed = max(minAllowedSpeed, min(24.5, agent.speed + (accel - agent.speed * 0.42) * dt))
-        agent.heading = wrappedAngle(agent.heading + agent.steeringAngle * 1.9 * dt)
-
-        let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
-        var nextPos = SIMD3<Float>(agent.node.position) + forward * agent.speed * dt
-        let updatedTrack = spline.closestTrackInfo(to: nextPos)
-        nextPos.y += (updatedTrack.trackCenter.y + 0.06 - nextPos.y) * min(1, dt * 16)
-
-        agent.node.position = SCNVector3(nextPos)
-        agent.node.eulerAngles = SCNVector3(0, agent.heading, -agent.steeringAngle * 0.06)
+        driveAlongRacingLine(agent: &agent, action: action, dt: dt)
 
         agent.lastStateKey = perception.stateKey
         agent.lastAction = action
-        agent.lastActionText = "CA: \(action)"
+        agent.lastActionText = "\(agent.driverPlanNote) • CA: \(action)"
+    }
+
+    /// Follows the planned trajectory. The CA's choice only nudges pace and line,
+    /// so what it learns can shape the driving without steering the car off the road.
+    private func driveAlongRacingLine(agent: inout RaceAgent, action: RaceAction, dt: Float) {
+        let paceFactor: Float
+        let nudge: Float
+        switch action {
+        case .accelerate:     paceFactor = 1.02; nudge = 0
+        case .hardBrake:      paceFactor = 0.95; nudge = 0
+        case .steerLeftHard:  paceFactor = 0.98; nudge = -0.6
+        case .steerLeftSoft:  paceFactor = 0.99; nudge = -0.3
+        case .steerRightSoft: paceFactor = 0.99; nudge = 0.3
+        case .steerRightHard: paceFactor = 0.98; nudge = 0.6
+        case .apexCut:        paceFactor = 1.00; nudge = 0
+        case .defendLine:     paceFactor = 0.99; nudge = 0
+        }
+        // Smoothed so frame-to-frame CA changes do not shake the car
+        agent.caLineNudge += (nudge - agent.caLineNudge) * min(1, dt * 1.5)
+
+        let position = SIMD3<Float>(agent.node.position)
+        let here = racingLine.project(position)
+
+        // Target speed: trajectory profile, what is visible, and traffic
+        let preview = here.distance + agent.speed * 0.25
+        var target = min(racingLine.targetSpeed(at: preview), agent.driverView.visibleSpeedLimit)
+        target *= agent.skill * paceFactor
+        if agent.isRecharging { target = min(target, 18) }
+        if abs(here.lateral) > LagunaSecaTrackBuilder.trackHalfWidth { target = min(target, 16) }
+        target = max(4, target)
+        target = min(target, agent.plannedSpeedLimit)   // traffic may require slower than 4 m/s
+
+        let previousSpeed = agent.speed
+        if agent.speed < target {
+            agent.speed = min(target, agent.speed + racingLine.limits.acceleration * dt)
+        } else {
+            agent.speed = max(target, agent.speed - racingLine.limits.braking * dt)
+        }
+
+        let wantedCurvature = LagunaSecaDriverAI.steeringCurvature(
+            line: racingLine,
+            position: position,
+            heading: agent.heading,
+            trackDistance: here.distance,
+            speed: agent.speed,
+            avoidOffset: agent.avoidOffset + agent.caLineNudge
+        )
+        // Limited by turning circle (5.2 m radius) and tire grip
+        let gripCurvature = racingLine.limits.lateralGrip * 1.3 / max(1, agent.speed * agent.speed)
+        let maxCurvature = min(1.0 / 5.2, gripCurvature)
+        let curvature = max(-maxCurvature, min(maxCurvature, wantedCurvature))
+        agent.heading = wrappedAngle(agent.heading - agent.speed * curvature * dt)
+        agent.steeringAngle += (-atan(2.457 * curvature) - agent.steeringAngle) * min(1, dt * 10)
+
+        let forward = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
+        var nextPos = position + forward * agent.speed * dt
+        _ = applyGuardRail(agent: &agent, position: &nextPos, dt: dt)
+        let updatedTrack = spline.closestTrackInfo(to: nextPos)
+        nextPos.y += (updatedTrack.trackCenter.y + 0.06 - nextPos.y) * min(1, dt * 16)
+
+        let braking = previousSpeed - agent.speed > 0.01
+        agent.node.position = SCNVector3(nextPos)
+        agent.node.eulerAngles = SCNVector3(braking ? 0.015 : 0, agent.heading, -agent.steeringAngle * 0.06)
+    }
+
+    /// What this agent can see, and how it plans to get around the cars in view.
+    private func lookAndPlan(index: Int, positions: [SIMD3<Float>]) {
+        let me = agents[index]
+        let here = racingLine.project(positions[index])
+
+        var others: [LagunaSecaDriverAI.OtherCar] = []
+        for j in agents.indices where j != index {
+            let projected = racingLine.project(positions[j])
+            others.append(LagunaSecaDriverAI.OtherCar(
+                id: agents[j].id,
+                position: positions[j],
+                trackDistance: projected.distance,
+                lateral: projected.lateral,
+                speed: agents[j].speed
+            ))
+        }
+
+        let view = LagunaSecaDriverAI.look(
+            line: racingLine,
+            position: positions[index],
+            heading: me.heading,
+            trackDistance: here.distance,
+            others: others
+        )
+        let plan = LagunaSecaDriverAI.plan(
+            line: racingLine,
+            view: view,
+            trackDistance: here.distance,
+            lateral: here.lateral,
+            speed: me.speed,
+            previousAvoidOffset: me.avoidOffset
+        )
+
+        // Move across smoothly: at most 0.45 m per sensor tick (about 4.5 m/s)
+        let change = max(-0.45, min(0.45, plan.avoidOffset - me.avoidOffset))
+        agents[index].avoidOffset = me.avoidOffset + change
+        agents[index].plannedSpeedLimit = plan.speedLimit
+        agents[index].driverView = view
+        agents[index].driverPlanNote = plan.note
+    }
+
+    /// Feeds the CA only what the driver can actually see.
+    private func applyDriverView(_ agent: RaceAgent, to perception: inout RacePerception) {
+        let view = agent.driverView
+        // Same scale as TrackSpline curvature (about 59 per 1/m)
+        perception.curvatureAhead = view.curveCurvature * 59.0
+        perception.elevationDropAhead = view.elevationChange
+        perception.pathDistanceAhead = view.sightDistance
+
+        if let nearest = view.cars.first {
+            let myLateral = racingLine.project(SIMD3<Float>(agent.node.position)).lateral
+            perception.nearestOpponentDistance = nearest.distance
+            perception.nearestOpponentLateralDelta = nearest.lateral - myLateral
+        } else {
+            perception.nearestOpponentDistance = .infinity
+            perception.nearestOpponentLateralDelta = 0
+        }
+        perception.detourActive = abs(agent.avoidOffset) > 0.5
+    }
+
+    /// Applies any knockback, then bounces the car off the guard rails.
+    /// Returns true on the frame the car strikes a rail.
+    private func applyGuardRail(agent: inout RaceAgent, position: inout SIMD3<Float>, dt: Float) -> Bool {
+        position += agent.bounceVelocity * dt
+        agent.bounceVelocity *= exp(-4.0 * dt)
+
+        let nearest = spline.nearestCenterlinePoint(to: position)
+        let delta = SIMD3<Float>(position.x - nearest.point.x, 0, position.z - nearest.point.z)
+        let distance = simd_length(delta)
+        guard distance > LagunaSecaTrackBuilder.barrierOffset - 2.6 else { return false }
+
+        // Unit vector pointing from the track out through the rail
+        let outward = delta / distance
+        let nose = SIMD3<Float>(-sin(agent.heading), 0, -cos(agent.heading))
+        let side = SIMD3<Float>(-nose.z, 0, nose.x)
+
+        // How far the 4.5 m x 2 m body reaches toward the rail at this angle
+        let reach = abs(simd_dot(nose, outward)) * 2.25 + abs(simd_dot(side, outward)) * 1.2
+        let limit = LagunaSecaTrackBuilder.barrierOffset - reach
+        guard distance > limit else { return false }
+
+        // Put the car back on the track side of the rail
+        position.x = nearest.point.x + outward.x * (limit - 0.05)
+        position.z = nearest.point.z + outward.z * (limit - 0.05)
+
+        let velocity = nose * agent.speed + agent.bounceVelocity
+        let impact = simd_dot(velocity, outward)   // speed into the rail
+        guard impact > 0 else { return false }
+
+        // Knock the car back toward the track
+        agent.bounceVelocity = -outward * min(18.0, max(5.0, impact * 0.6))
+
+        if agent.speed > 0 {
+            // Deflect the nose along the rail and back toward the road.
+            // Near head-on hits turn the car in the race direction.
+            let along = simd_normalize(nearest.tangent - outward * simd_dot(nearest.tangent, outward))
+            let alignment = simd_dot(nose, along)
+            let directionSign: Float = alignment < -0.35 ? -1 : 1
+            let newNose = simd_normalize(along * directionSign - outward * 0.35)
+            agent.heading = atan2(-newNose.x, -newNose.z)
+
+            // Harder hits scrub off more speed
+            let headOnRatio = min(1, impact / max(1, agent.speed))
+            agent.speed *= 1.0 - 0.65 * headOnRatio
+        } else {
+            agent.speed = 0
+        }
+
+        agent.steeringAngle = 0
+        agent.outcomeWindow?.collisionEvents += 1
+        return true
     }
 
     private func evaluateOutcomeWindow(
@@ -548,9 +723,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 - offTrackRatio * 1.4
                 - (win.stallDuration > 0.25 ? 0.5 : 0)
 
-            let nextLatBand = trackInfo.lateralOffset < -1.5 ? "L" : (trackInfo.lateralOffset > 1.5 ? "R" : "C")
+            let nextLatBand = trackInfo.lateralOffset < -1.8 ? "L" : (trackInfo.lateralOffset > 1.8 ? "R" : "C")
             let nextCurveBand = abs(trackInfo.curvature) > 0.03 ? "sharp" : "straight"
-            let nextState = "\(nextLatBand)|\(nextCurveBand)|\(max(0, Int(agent.speed / 6.0)))"
+            let nextState = "\(nextLatBand)|\(nextCurveBand)|\(max(0, Int(agent.speed / 12.0)))"
 
             agent.ca?.learn(
                 fromState: win.lastStateKey,
@@ -628,7 +803,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 role: a.role,
                 lap: min(totalLaps, a.lap),
                 positionRank: rankMap[a.id] ?? 1,
-                speedKmh: Int(abs(a.speed) * 3.6),
+                speedMph: Int((abs(a.speed) * 2.23694).rounded()),
                 energyPercent: Int(a.energyReserve.rounded()),
                 missionPhase: a.activeMissionPhase.rawValue,
                 caGeneration: a.ca?.generation ?? 0,

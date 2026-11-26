@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(.white)
                                 Spacer(minLength: 8)
-                                Text("\(car.speedKmh) km/h")
+                                Text("\(car.speedMph) mph")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.85))
                             }
@@ -99,7 +99,7 @@ struct ContentView: View {
                         SteeringWheelNavView(wheelSteer: $thumbInput.leftThumbX)
 
                         if let player = telemetry.first(where: { $0.role == .firstPersonPlayer }) {
-                            Text("\(player.speedKmh) KM/H")
+                            Text("\(player.speedMph) MPH")
                                 .font(.headline.monospacedDigit())
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 10)

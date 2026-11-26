@@ -2,6 +2,11 @@ import Foundation
 import Combine
 import simd
 
+/// Explicit cellular automaton rules used in this pipeline:
+/// - Any live cell with two or three live neighbors survives.
+/// - Any dead cell with exactly three live neighbors becomes a live cell.
+/// - All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+
 /// Racing controller with a 100 x 100 learning grid,
 /// perception encoding, associative experience memory,
 /// trajectory confidence, Q-learning, rollout scoring,
@@ -176,6 +181,12 @@ final class LagunaSecaCA: ObservableObject {
     // MARK: - Cellular Grid Evolution
 
     func step() {
+        /*
+         Apply cellular automaton rules (Conway's Game of Life):
+         - Any live cell with two or three live neighbors survives.
+         - Any dead cell with exactly three live neighbors becomes a live cell.
+         - All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+         */
         for y in 0..<size {
             for x in 0..<size {
                 let neighbors = liveNeighborCount(x: x, y: y)
@@ -196,6 +207,8 @@ final class LagunaSecaCA: ObservableObject {
         liveCellCount = countLiveCells()
     }
 
+    /// Counts live neighbors around a cell at (x,y).
+    /// Supports application of the chosen automaton rules.
     private func liveNeighborCount(x: Int, y: Int) -> Int {
         var count = 0
 
@@ -1147,3 +1160,4 @@ final class LagunaSecaCA: ObservableObject {
         ][action.rawValue] = updated
     }
 }
+

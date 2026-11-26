@@ -2,6 +2,10 @@ import SceneKit
 import UIKit
 import simd
 
+import SceneKit
+import UIKit
+import simd
+
 final class LagunaSecaTrackBuilder {
 
     struct TrackSpline {
@@ -311,6 +315,7 @@ final class LagunaSecaTrackBuilder {
         trackRoot.addChildNode(gantry)
 
         buildGuideFeatures(in: trackRoot, spline: spline)
+        LagunaSecaGrandstand.add(to: trackRoot, spline: spline)
 
         scene.rootNode.addChildNode(trackRoot)
     }

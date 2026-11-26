@@ -137,7 +137,7 @@ struct RaceCarTelemetry: Identifiable, Equatable {
     let role: RaceCarRole
     let lap: Int
     let positionRank: Int
-    let speedKmh: Int
+    let speedMph: Int
     let energyPercent: Int
     let missionPhase: String
     let caGeneration: Int

@@ -79,10 +79,8 @@ struct LagunaSecaRaceSceneRepresentable: UIViewRepresentable {
 
         if resetCounter != context.coordinator.lastResetCounter {
             context.coordinator.lastResetCounter = resetCounter
+            // The coordinator also switches the view to the new driver camera
             coord.resetRace()
-            if let fpCam = uiView.scene?.rootNode.childNode(withName: "FirstPersonDriverCamera", recursively: true) {
-                uiView.pointOfView = fpCam
-            }
         }
     }
 }
