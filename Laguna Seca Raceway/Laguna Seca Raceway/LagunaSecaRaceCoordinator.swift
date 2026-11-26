@@ -81,10 +81,17 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         agents.removeAll()
 
         let configs: [(id: String, name: String, role: RaceCarRole, startDist: Float, lateral: Float, color: UIColor, accent: UIColor, caSeed: Int?)] = [
-            ("player", "You (1st Person)", .firstPersonPlayer, 12.0, -2.2, UIColor.systemBlue, UIColor.cyan, nil),
-            ("ca-1",   "CA Racer #1",      .caAgent,            8.0,  2.2, UIColor.systemRed, UIColor.yellow, 1),
-            ("ca-2",   "CA Racer #2",      .caAgent,            4.0, -2.2, UIColor.systemGreen, UIColor.white, 2),
-            ("ca-3",   "CA Racer #3",      .caAgent,            0.0,  2.2, UIColor.systemOrange, UIColor.black, 3)
+            ("player", "You (1st Person)", .firstPersonPlayer, 88.0, -2.2, UIColor.systemBlue, UIColor.cyan, nil),
+            ("ca-1",   "CA Racer #1",      .caAgent,           84.0,  2.2, UIColor.systemRed, UIColor.yellow, 1),
+            ("ca-2",   "CA Racer #2",      .caAgent,           80.0, -2.2, UIColor.systemGreen, UIColor.white, 2),
+            ("ca-3",   "CA Racer #3",      .caAgent,           76.0,  2.2, UIColor.systemOrange, UIColor.black, 3),
+            ("ca-4",   "CA Racer #4",      .caAgent,           72.0, -2.2, UIColor.systemPurple, UIColor.green, 4),
+            ("ca-5",   "CA Racer #5",      .caAgent,           68.0,  2.2, UIColor.systemPink, UIColor.white, 5),
+            ("ca-6",   "CA Racer #6",      .caAgent,           64.0, -2.2, UIColor.systemTeal, UIColor.yellow, 6),
+            ("ca-7",   "CA Racer #7",      .caAgent,           60.0,  2.2, UIColor.systemIndigo, UIColor.orange, 7),
+            ("ca-8",   "CA Racer #8",      .caAgent,           56.0, -2.2, UIColor.systemBrown, UIColor.white, 8),
+            ("ca-9",   "CA Racer #9",      .caAgent,           52.0,  2.2, UIColor.systemMint, UIColor.black, 9)
+         
         ]
 
         for cfg in configs {

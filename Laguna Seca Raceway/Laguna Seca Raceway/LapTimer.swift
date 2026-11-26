@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Race clock and lap times for one car.
 struct LapTimer: Equatable {
-    var totalLaps: Int = 3
+    var totalLaps: Int = 10
     private(set) var elapsed: TimeInterval = 0
     private(set) var lapTimes: [TimeInterval] = []   // completed laps, in order
     private(set) var hasStarted = false
