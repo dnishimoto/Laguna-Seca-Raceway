@@ -115,7 +115,7 @@ enum LagunaSecaGrandstand {
                 .foregroundColor: UIColor.systemYellow,
                 .paragraphStyle: style
             ]
-            ("LAGUNA SECA FAN ZONE" as NSString)
+            ("SAWTOOTH RIDGE FAN ZONE" as NSString)
                 .draw(in: CGRect(x: 0, y: 6, width: size.width, height: 60), withAttributes: attributes)
         }
     }

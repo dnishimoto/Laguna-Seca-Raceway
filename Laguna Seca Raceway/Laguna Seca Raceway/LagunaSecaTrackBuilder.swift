@@ -2,9 +2,6 @@ import SceneKit
 import UIKit
 import simd
 
-import SceneKit
-import UIKit
-import simd
 
 final class LagunaSecaTrackBuilder {
 
@@ -43,7 +40,7 @@ final class LagunaSecaTrackBuilder {
             let crossY = t1.x * t2.z - t1.z * t2.x
             let curvature = crossY * 18.0
 
-            // 75 m look-ahead scaled for 3,602 m circuit
+            // 75 m look-ahead for hills
             let lookAheadDist = (d + 75.0).truncatingRemainder(dividingBy: totalLength)
             let aheadSample = pointAt(distance: lookAheadDist)
             let elevationDeltaAhead = aheadSample.y - pos.y
@@ -112,36 +109,42 @@ final class LagunaSecaTrackBuilder {
         }
     }
 
-    /// Real-world Laguna Seca asphalt width is ~14 m (half-width = 7.0 m)
+    /// Asphalt is 14 m wide (half-width = 7.0 m)
     static let trackHalfWidth: Float = 7.0
 
-    /// 1:1 Meter-scale Laguna Seca circuit (~3,602 m lap length, 55 m climb to Corkscrew)
+    /// Sawtooth Ridge Raceway: an original, fictional circuit.
+    /// 4,200 m clockwise lap with three outer loops and gentle hills (19 m of elevation).
+    /// 1 unit = 1 meter. The function name is kept so existing callers do not change.
     static func makeLagunaSecaSpline() -> TrackSpline {
-        // Base control points modeled on actual Laguna Seca geometry (1 unit = 1 meter)
         let rawPoints: [SIMD3<Float>] = [
-            SIMD3<Float>(   0,  0.0,  340),   // Start / Finish line
-            SIMD3<Float>(   0,  0.5, -180),   // Front straight into Turn 1 crest
-            SIMD3<Float>( -55,  2.5, -340),   // Turn 1 fast left kink
-            SIMD3<Float>(-195,  1.0, -455),   // Turn 2 (Andretti Hairpin) entry
-            SIMD3<Float>(-275,  1.5, -365),   // Turn 2 hairpin apex & exit
-            SIMD3<Float>(-240,  4.0, -170),   // Short chute to Turn 3
-            SIMD3<Float>(-350,  6.5,  -75),   // Turn 3 right-hander
-            SIMD3<Float>(-490,  9.5, -135),   // Straight toward Turn 4
-            SIMD3<Float>(-620, 12.0,  -20),   // Turn 4 right-hander
-            SIMD3<Float>(-645, 16.5,  230),   // Straight to Turn 5
-            SIMD3<Float>(-565, 22.0,  390),   // Turn 5 uphill left-hander
-            SIMD3<Float>(-415, 34.0,  475),   // Rahal Straight climb
-            SIMD3<Float>(-330, 44.0,  615),   // Turn 6 fast uphill left
-            SIMD3<Float>(-210, 52.5,  695),   // Steep climb toward Turn 7
-            SIMD3<Float>(-125, 55.0,  645),   // Turn 7 crest / Corkscrew approach (+55 m peak)
-            SIMD3<Float>( -85, 49.0,  575),   // Turn 8 (Corkscrew left entry)
-            SIMD3<Float>( -35, 37.0,  535),   // Turn 8A (Corkscrew plunge -18 m drop)
-            SIMD3<Float>(  35, 24.5,  615),   // Turn 9 (Rainey Curve fast downhill left)
-            SIMD3<Float>( 195, 11.0,  675),   // Approach to Turn 10
-            SIMD3<Float>( 335,  3.5,  585),   // Turn 10 downhill right-hander
-            SIMD3<Float>( 285,  1.0,  435),   // Straight to Turn 11
-            SIMD3<Float>( 145,  0.0,  455),   // Turn 11 tight hairpin onto main straight
-            SIMD3<Float>(  20,  0.0,  415)    // Final straight alignment
+            SIMD3<Float>(  0,  0.0,  430),   // Start / Finish line
+            SIMD3<Float>(  0,  0.0,  160),   // Main straight
+            SIMD3<Float>(  0,  1.0, -190),
+            SIMD3<Float>( 35,  2.0, -330),   // North sweeper
+            SIMD3<Float>(150,  4.0, -415),
+            SIMD3<Float>(300,  6.0, -420),
+            SIMD3<Float>(405,  8.0, -335),
+            SIMD3<Float>(385, 10.0, -225),
+            SIMD3<Float>(275, 11.0, -165),   // First infield loop
+            SIMD3<Float>(250, 12.0,  -65),
+            SIMD3<Float>(330, 14.0,   15),
+            SIMD3<Float>(470, 17.0,    5),
+            SIMD3<Float>(590, 19.0, -110),   // High point
+            SIMD3<Float>(740, 18.0, -125),
+            SIMD3<Float>(835, 16.0,  -15),   // East loop
+            SIMD3<Float>(805, 13.0,  120),
+            SIMD3<Float>(680, 11.0,  175),
+            SIMD3<Float>(545, 10.0,  215),   // Second infield loop
+            SIMD3<Float>(500,  9.0,  310),
+            SIMD3<Float>(590,  8.0,  385),
+            SIMD3<Float>(730,  6.0,  415),
+            SIMD3<Float>(775,  5.0,  525),   // Southeast loop
+            SIMD3<Float>(690,  3.0,  625),
+            SIMD3<Float>(520,  2.0,  640),
+            SIMD3<Float>(380,  3.0,  560),   // South esses
+            SIMD3<Float>(250,  2.0,  555),
+            SIMD3<Float>(150,  1.0,  640),
+            SIMD3<Float>( 45,  0.0,  590)    // Final corner onto the main straight
         ]
 
         func sampleClosedCatmullRom(_ pts: [SIMD3<Float>], steps: Int) -> [SIMD3<Float>] {
@@ -168,7 +171,7 @@ final class LagunaSecaTrackBuilder {
             return result
         }
 
-        // Measure unscaled length and normalize XZ to exact 3,602 m official circuit length
+        // Measure the unscaled length, then scale XZ to the target lap length
         let initialSample = sampleClosedCatmullRom(rawPoints, steps: 32)
         var rawLength: Float = 0
         for i in 1..<initialSample.count {
@@ -176,7 +179,7 @@ final class LagunaSecaTrackBuilder {
         }
         rawLength += simd_distance(initialSample.last!, initialSample.first!)
 
-        let targetLength: Float = 3602.0
+        let targetLength: Float = 4200.0
         let xzScale = rawLength > 1 ? (targetLength / rawLength) : 1.0
         let scaledControlPoints = rawPoints.map {
             SIMD3<Float>($0.x * xzScale, $0.y, $0.z * xzScale)
@@ -203,7 +206,7 @@ final class LagunaSecaTrackBuilder {
 
     static func buildTrack(in scene: SCNScene, spline: TrackSpline) {
         let trackRoot = SCNNode()
-        trackRoot.name = "LagunaSecaTrackRoot"
+        trackRoot.name = "RaceTrackRoot"
 
         let ground = SCNFloor()
         ground.reflectivity = 0.04
@@ -211,7 +214,7 @@ final class LagunaSecaTrackBuilder {
         groundMat.diffuse.contents = UIColor(red: 0.24, green: 0.31, blue: 0.19, alpha: 1.0)
         ground.materials = [groundMat]
         let groundNode = SCNNode(geometry: ground)
-        groundNode.name = "LagunaGround"
+        groundNode.name = "TrackGround"
         groundNode.position = SCNVector3(0, -0.35, 0)
         groundNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
         trackRoot.addChildNode(groundNode)
@@ -265,7 +268,7 @@ final class LagunaSecaTrackBuilder {
         roadGeo.materials = [roadMat]
 
         let roadNode = SCNNode(geometry: roadGeo)
-        roadNode.name = "LagunaAsphalt"
+        roadNode.name = "TrackAsphalt"
         roadNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
         trackRoot.addChildNode(roadNode)
 
