@@ -86,6 +86,8 @@ struct ContentView: View {
                     }
                     .padding(10)
                     .frame(maxWidth: 250)
+                    // Rows slide to their new places when a car passes another
+                    .animation(.easeInOut(duration: 0.3), value: telemetry.map(\.id))
                     .background(.black.opacity(0.55))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 

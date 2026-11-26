@@ -7,7 +7,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
     /// Race weight in kg. A heavier car is pushed around less in a collision.
     private static let carMasses: [String: Float] = [
-        "player": 1430,                                // Porsche 911 GT3 class
+        "player": 1430,                                // sports car
         "ca-1": 1250, "ca-2": 1600, "ca-3": 1350,
         "ca-4": 1500, "ca-5": 1200, "ca-6": 1550,
         "ca-7": 1300, "ca-8": 1450, "ca-9": 1400
@@ -25,6 +25,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         var lap: Int = 1
         var lapTimer = LapTimer()
         var totalProgress: Float = 0
+        var finishPlace: Int?                      // set once, when the last lap is done
         var speed: Float = 0
         var bounceVelocity: SIMD3<Float> = .zero   // sliding motion from rail and car hits
         var spinVelocity: Float = 0                // yaw rate from car hits, rad/s
@@ -70,6 +71,11 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
     private var lastFrameTime: TimeInterval = 0
     private var lastTelemetryTime: TimeInterval = 0
+    private var standingOrder: [String] = []       // car ids, leader first
+    private var finishedCount = 0
+    /// A car must be this far ahead (meters) to take a place, so the list
+    /// does not flicker while two cars run side by side
+    private let passMargin: Float = 0.5
     private let telemetryInterval: TimeInterval = 0.12
     private let sensorInterval: TimeInterval = 0.10
     private let outcomeWindowDuration: TimeInterval = 0.45
@@ -90,6 +96,8 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agent.node.removeFromParentNode()
         }
         agents.removeAll()
+        standingOrder.removeAll()
+        finishedCount = 0
 
         let configs: [(id: String, name: String, role: RaceCarRole, startDist: Float, lateral: Float, color: UIColor, accent: UIColor, caSeed: Int?)] = [
             ("player", "You (1st Person)", .firstPersonPlayer, 88.0, -2.2, UIColor.systemBlue, UIColor.cyan, nil),
@@ -152,6 +160,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             )
             agents.append(agent)
         }
+
+        // The grid order is the starting order
+        standingOrder = agents.map { $0.id }
     }
 
     /// Safe to call from the main thread. The cars are rebuilt at the start of the next
@@ -232,6 +243,8 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         }
 
         resolveCarCollisions()
+        recordFinishers()
+        updateStandings()
 
         if time - lastTelemetryTime >= telemetryInterval {
             lastTelemetryTime = time
@@ -398,7 +411,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             nearestOpponent: (distance: Float, lateralDelta: Float),
             dt: Float
         ) {
-            // Porsche 911 GT3 (992) chassis parameters (1 unit = 1 meter)
+            // Sports-car chassis parameters (1 unit = 1 meter)
             let wheelbaseMeters: Float = 2.457
             let minTurnRadiusMeters: Float = 5.20
             let maxLockWheelAngleRad: Float = asin(wheelbaseMeters / minTurnRadiusMeters) // ~0.492 rad
@@ -454,7 +467,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             let frontLoadFactor = max(0.84, min(1.22, 1.0 + brakeAmount * 0.16 - throttleAmount * 0.08))
             let speedRatio = min(1.0, abs(agent.speed) / maxForwardSpeed)
 
-            // GT3 downforce offsets high-speed slip so tires stay planted instead of washing out
+            // Downforce offsets high-speed slip so tires stay planted instead of washing out
             let highSpeedGripScale = max(0.76, 1.0 - 0.24 * (speedRatio * speedRatio)) * surfaceGrip
             let yawGain: Float = 0.78 * frontLoadFactor
 
@@ -491,7 +504,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             }
 
             if thumbInput.boostEngaged {
-                agent.lastActionText = "GT3 Boost"
+                agent.lastActionText = "Boost"
             } else if brakeAmount > 0.08 {
                 agent.lastActionText = "Brake (\(Int(brakeAmount * 100))%)"
             } else if abs(shapedSteer) > 0.06 {
@@ -799,7 +812,48 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
         agent.distanceAlongTrack = currDist
         agent.lastTrackDistance = currDist
-        agent.totalProgress = Float(agent.lap - 1) * len + currDist
+
+        // The track center is stored as points a few meters apart. Add the distance
+        // past the nearest point so close cars can be told apart.
+        let pastPoint = SIMD3<Float>(agent.node.position) - trackInfo.trackCenter
+        let alongOffset = pastPoint.x * trackInfo.tangent.x + pastPoint.z * trackInfo.tangent.z
+        agent.totalProgress = Float(agent.lap - 1) * len + currDist + alongOffset
+    }
+
+    /// Gives each car its finishing place as it completes the last lap
+    private func recordFinishers() {
+        let justFinished = agents.indices
+            .filter { agents[$0].finishPlace == nil && agents[$0].lapTimer.isFinished }
+            .sorted { agents[$0].totalProgress > agents[$1].totalProgress }
+
+        for i in justFinished {
+            finishedCount += 1
+            agents[i].finishPlace = finishedCount
+        }
+    }
+
+    /// Re-orders the standings as cars pass each other
+    private func updateStandings() {
+        let byId = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
+
+        // True when the car behind in the list should move above the car ahead of it
+        func shouldPass(_ behindId: String, _ aheadId: String) -> Bool {
+            guard let behind = byId[behindId], let ahead = byId[aheadId] else { return false }
+            switch (behind.finishPlace, ahead.finishPlace) {
+            case let (b?, a?): return b < a        // finishers keep their finishing order
+            case (_?, nil):    return true         // finishers rank above cars still racing
+            case (nil, _?):    return false
+            case (nil, nil):   return behind.totalProgress > ahead.totalProgress + passMargin
+            }
+        }
+
+        for start in standingOrder.indices.dropFirst() {
+            var i = start
+            while i > 0 && shouldPass(standingOrder[i], standingOrder[i - 1]) {
+                standingOrder.swapAt(i, i - 1)
+                i -= 1
+            }
+        }
     }
 
     /// Car-to-car hits using each car's mass. Momentum passes from one car to the other.
@@ -866,10 +920,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     }
 
     private func publishTelemetry() {
-        let sortedByProgress = agents.sorted { $0.totalProgress > $1.totalProgress }
         var rankMap: [String: Int] = [:]
-        for (idx, item) in sortedByProgress.enumerated() {
-            rankMap[item.id] = idx + 1
+        for (idx, id) in standingOrder.enumerated() {
+            rankMap[id] = idx + 1
         }
 
         let items: [RaceCarTelemetry] = agents.map { a in
@@ -890,6 +943,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 decisionNote: a.ca?.lastDecisionText ?? "Steering wheel input"
             )
         }
+        .sorted { $0.positionRank < $1.positionRank }   // leader first
 
         let leadCA = agents.first(where: { $0.role == .caAgent })?.ca
         let gen = leadCA?.generation ?? 0

@@ -58,7 +58,7 @@ struct TrackSample {
     var lateralOffset: Float = 0          // 0 = center, negative = left, positive = right
     var trackHalfWidth: Float = 5.5
     var curvature: Float = 0              // signed turn sharpness ahead
-    var elevationDeltaAhead: Float = 0    // e.g. Corkscrew drop
+    var elevationDeltaAhead: Float = 0    // e.g. a downhill ahead
     var nearestCarDistance: Float = .infinity
     var nearestCarBearing: Float = 0
     var offTrackRisk: Float = 0

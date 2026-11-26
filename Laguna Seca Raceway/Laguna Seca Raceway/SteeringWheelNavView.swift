@@ -13,7 +13,7 @@ struct SteeringWheelNavView: View {
     @Binding var wheelSteer: Float // -1.0 left ... +1.0 right
 
     private let maxDragWidth: CGFloat = 68
-    // Porsche 911 GT3 rack: ~2.28 turns lock-to-lock (±410 degrees)
+    // Sports-car rack: ~2.28 turns lock-to-lock (±410 degrees)
     private let maxWheelDegrees: Double = 410.0
 
     var body: some View {
@@ -40,7 +40,7 @@ struct SteeringWheelNavView: View {
                     .fill(.cyan)
                     .frame(width: 22, height: 22)
 
-                // Porsche GT3 12-o'clock yellow center marker
+                // 12-o'clock yellow center marker
                 Rectangle()
                     .fill(.yellow)
                     .frame(width: 6, height: 12)
@@ -61,7 +61,7 @@ struct SteeringWheelNavView: View {
                     }
             )
 
-            Text("GT3 STEERING • 5.2M RADIUS")
+            Text("SPORT STEERING • 5.2M RADIUS")
                 .font(.caption2.bold())
                 .foregroundStyle(.white)
         }
