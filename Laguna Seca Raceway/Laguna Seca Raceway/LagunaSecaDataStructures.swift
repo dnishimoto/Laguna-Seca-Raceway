@@ -136,6 +136,7 @@ struct RaceCarTelemetry: Identifiable, Equatable {
     let name: String
     let role: RaceCarRole
     let lap: Int
+    let lapTimer: LapTimer
     let positionRank: Int
     let speedMph: Int
     let energyPercent: Int

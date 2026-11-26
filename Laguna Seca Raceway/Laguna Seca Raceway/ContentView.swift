@@ -60,6 +60,10 @@ struct ContentView: View {
                         }
                         .buttonStyle(.borderedProminent)
 
+                        if let player = telemetry.first(where: { $0.role == .firstPersonPlayer }) {
+                            LapTimerView(timer: player.lapTimer)
+                        }
+
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("CA Gen: \(caGeneration)")
                             Text("Live Cells: \(caLiveCells)")

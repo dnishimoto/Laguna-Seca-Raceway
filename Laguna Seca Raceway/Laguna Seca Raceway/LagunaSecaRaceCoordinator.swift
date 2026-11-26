@@ -15,6 +15,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         var distanceAlongTrack: Float = 0
         var lastTrackDistance: Float = 0
         var lap: Int = 1
+        var lapTimer = LapTimer()
         var totalProgress: Float = 0
         var speed: Float = 0
         var bounceVelocity: SIMD3<Float> = .zero   // knockback from guard rails
@@ -50,7 +51,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     var thumbInput = ThumbInputState()
     var animationSpeed: Double = 1.0
     var isRunning: Bool = true
-    var totalLaps: Int = 3
+    var totalLaps: Int = 10
 
     // Reset is requested on the main thread but carried out on the render thread
     private let resetLock = NSLock()
@@ -120,6 +121,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agent.lastTrackDistance = cfg.startDist
             agent.totalProgress = cfg.startDist
             agent.heading = yaw
+            agent.lapTimer = LapTimer(totalLaps: totalLaps)
             agent.skill = cfg.caSeed.map { 1.0 - Float($0 - 1) * 0.03 } ?? 1.0
             agent.outcomeWindow = OutcomeEvaluationWindow(
                 startTime: 0,
@@ -206,6 +208,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             }
 
             updateLapAndProgress(agent: &agents[i], trackInfo: trackInfo)
+            agents[i].lapTimer.update(lapNumber: agents[i].lap, speed: agents[i].speed, dt: TimeInterval(dt))
             evaluateOutcomeWindow(agent: &agents[i], trackInfo: trackInfo, dt: dt, time: time)
         }
 
@@ -760,12 +763,12 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         if prevDist > len * 0.75 && currDist < len * 0.25 {
             agent.lap += 1
         } else if prevDist < len * 0.25 && currDist > len * 0.75 {
-            agent.lap = max(1, agent.lap - 1)
+            agent.lap = max(0, agent.lap - 1)
         }
 
         agent.distanceAlongTrack = currDist
         agent.lastTrackDistance = currDist
-        agent.totalProgress = Float(max(0, agent.lap - 1)) * len + currDist
+        agent.totalProgress = Float(agent.lap - 1) * len + currDist
     }
 
     private func resolveCarToCarSpacing() {
@@ -801,7 +804,8 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 id: a.id,
                 name: a.name,
                 role: a.role,
-                lap: min(totalLaps, a.lap),
+                lap: max(1, min(totalLaps, a.lap)),
+                lapTimer: a.lapTimer,
                 positionRank: rankMap[a.id] ?? 1,
                 speedMph: Int((abs(a.speed) * 2.23694).rounded()),
                 energyPercent: Int(a.energyReserve.rounded()),
