@@ -5,6 +5,14 @@ import simd
 
 final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
 
+    /// Race weight in kg. A heavier car is pushed around less in a collision.
+    private static let carMasses: [String: Float] = [
+        "player": 1430,                                // Porsche 911 GT3 class
+        "ca-1": 1250, "ca-2": 1600, "ca-3": 1350,
+        "ca-4": 1500, "ca-5": 1200, "ca-6": 1550,
+        "ca-7": 1300, "ca-8": 1450, "ca-9": 1400
+    ]
+
     struct RaceAgent {
         let id: String
         let name: String
@@ -18,7 +26,10 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         var lapTimer = LapTimer()
         var totalProgress: Float = 0
         var speed: Float = 0
-        var bounceVelocity: SIMD3<Float> = .zero   // knockback from guard rails
+        var bounceVelocity: SIMD3<Float> = .zero   // sliding motion from rail and car hits
+        var spinVelocity: Float = 0                // yaw rate from car hits, rad/s
+        var mass: Float = 1430                     // kg, with driver
+        var impactTimer: Float = 0                 // keeps the "Collision" label up briefly
         var avoidOffset: Float = 0                 // planned shift off the racing line
         var caLineNudge: Float = 0                 // small line preference from the CA
         var driverView = DriverView()
@@ -128,6 +139,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             agent.lastTrackDistance = cfg.startDist
             agent.totalProgress = cfg.startDist
             agent.heading = yaw
+            agent.mass = Self.carMasses[cfg.id] ?? 1430
             agent.lapTimer = LapTimer(totalLaps: totalLaps)
             agent.skill = cfg.caSeed.map { 1.0 - Float($0 - 1) * 0.03 } ?? 1.0
             agent.outcomeWindow = OutcomeEvaluationWindow(
@@ -219,7 +231,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             evaluateOutcomeWindow(agent: &agents[i], trackInfo: trackInfo, dt: dt, time: time)
         }
 
-        resolveCarToCarSpacing()
+        resolveCarCollisions()
 
         if time - lastTelemetryTime >= telemetryInterval {
             lastTelemetryTime = time
@@ -416,6 +428,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             let accelRate: Float = 24.0 * boostMult
             let brakeRate: Float = 38.0
 
+            let speedBeforeControls = agent.speed   // may be outside engine limits after a hit
             let isOffTrack = abs(trackInfo.lateralOffset) > LagunaSecaTrackBuilder.trackHalfWidth
             let surfaceGrip: Float = isOffTrack ? 0.58 : 1.0
             let drag: Float = isOffTrack ? 1.35 : 0.24
@@ -432,10 +445,10 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             }
 
             if brakeAmount > 0.02 {
-                agent.speed = max(-10.0, agent.speed - brakeAmount * brakeRate * surfaceGrip * dt)
+                agent.speed = max(min(-10.0, speedBeforeControls), agent.speed - brakeAmount * brakeRate * surfaceGrip * dt)
             }
 
-            agent.speed = max(-10.0, min(maxForwardSpeed, agent.speed))
+            agent.speed = max(min(-10.0, speedBeforeControls), min(max(maxForwardSpeed, speedBeforeControls), agent.speed))
 
             // Weight transfer: trail-braking loads front tires (+front grip), heavy throttle slightly lightens nose
             let frontLoadFactor = max(0.84, min(1.22, 1.0 + brakeAmount * 0.16 - throttleAmount * 0.08))
@@ -491,7 +504,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             } else {
                 agent.lastActionText = "Coast"
             }
-            if hitRail || simd_length(agent.bounceVelocity) > 1.0 {
+            if agent.impactTimer > 0 {
+                agent.lastActionText = "Collision"
+            } else if hitRail {
                 agent.lastActionText = "Guard Rail Bounce"
             }
         }
@@ -544,6 +559,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         if abs(here.lateral) > LagunaSecaTrackBuilder.trackHalfWidth { target = min(target, 16) }
         target = max(4, target)
         target = min(target, agent.plannedSpeedLimit)   // traffic may require slower than 4 m/s
+        let trackForward = spline.frame(atDistance: here.distance).forward
+        let facing = -sin(agent.heading) * trackForward.x - cos(agent.heading) * trackForward.z
+        if facing < 0 { target = 6 }                    // turning around after a spin
 
         let previousSpeed = agent.speed
         if agent.speed < target {
@@ -563,7 +581,9 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         // Limited by turning circle (5.2 m radius) and tire grip
         let gripCurvature = racingLine.limits.lateralGrip * 1.3 / max(1, agent.speed * agent.speed)
         let maxCurvature = min(1.0 / 5.2, gripCurvature)
-        let curvature = max(-maxCurvature, min(maxCurvature, wantedCurvature))
+        // The tires cannot steer while a hit still has the car spinning quickly
+        let control = max(0, 1 - abs(agent.spinVelocity) / 2.5)
+        let curvature = max(-maxCurvature, min(maxCurvature, wantedCurvature)) * control
         agent.heading = wrappedAngle(agent.heading - agent.speed * curvature * dt)
         agent.steeringAngle += (-atan(2.457 * curvature) - agent.steeringAngle) * min(1, dt * 10)
 
@@ -642,7 +662,10 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
     /// Returns true on the frame the car strikes a rail.
     private func applyGuardRail(agent: inout RaceAgent, position: inout SIMD3<Float>, dt: Float) -> Bool {
         position += agent.bounceVelocity * dt
-        agent.bounceVelocity *= exp(-4.0 * dt)
+        agent.bounceVelocity *= exp(-4.0 * dt)      // tire grip stops the sideways slide
+        agent.heading = wrappedAngle(agent.heading + agent.spinVelocity * dt)
+        agent.spinVelocity *= exp(-3.5 * dt)        // and damps the spin
+        agent.impactTimer = max(0, agent.impactTimer - dt)
 
         let nearest = spline.nearestCenterlinePoint(to: position)
         let delta = SIMD3<Float>(position.x - nearest.point.x, 0, position.z - nearest.point.z)
@@ -687,6 +710,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         }
 
         agent.steeringAngle = 0
+        agent.spinVelocity *= 0.3                   // the rail stops most of any spin
         agent.outcomeWindow?.collisionEvents += 1
         return true
     }
@@ -778,23 +802,65 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
         agent.totalProgress = Float(agent.lap - 1) * len + currDist
     }
 
-    private func resolveCarToCarSpacing() {
+    /// Car-to-car hits using each car's mass. Momentum passes from one car to the other.
+    private func resolveCarCollisions() {
         guard agents.count >= 2 else { return }
-        let minSep: Float = 2.35
-        for i in 0..<agents.count {
-            for j in (i + 1)..<agents.count {
-                let pA = SIMD3<Float>(agents[i].node.position)
-                let pB = SIMD3<Float>(agents[j].node.position)
-                let delta = pB - pA
-                let dist = simd_length(SIMD2<Float>(delta.x, delta.z))
-                if dist > 0.001 && dist < minSep {
-                    let overlap = (minSep - dist) * 0.5
-                    let dir = simd_normalize(SIMD3<Float>(delta.x, 0, delta.z))
-                    agents[i].node.position = SCNVector3(pA - dir * overlap)
-                    agents[j].node.position = SCNVector3(pB + dir * overlap)
-                    agents[i].outcomeWindow?.collisionEvents += 1
-                    agents[j].outcomeWindow?.collisionEvents += 1
+
+        var bodies: [LagunaSecaCollisionPhysics.Body] = agents.map { agent in
+            let position = agent.node.position
+            let nose = SIMD2<Float>(-sin(agent.heading), -cos(agent.heading))
+            let slide = SIMD2<Float>(agent.bounceVelocity.x, agent.bounceVelocity.z)
+            return LagunaSecaCollisionPhysics.Body(
+                position: SIMD2<Float>(Float(position.x), Float(position.z)),
+                velocity: nose * agent.speed + slide,
+                heading: agent.heading,
+                spin: agent.spinVelocity,
+                mass: agent.mass
+            )
+        }
+
+        var touched = [Bool](repeating: false, count: agents.count)
+        var struck = [Bool](repeating: false, count: agents.count)
+
+        // A few passes let a hit travel through a line or pack of cars
+        for _ in 0..<3 {
+            for i in 0..<bodies.count {
+                for j in (i + 1)..<bodies.count {
+                    // Skip cars separated in height
+                    if abs(Float(agents[i].node.position.y - agents[j].node.position.y)) > 2.0 { continue }
+
+                    var a = bodies[i]
+                    var b = bodies[j]
+                    guard let impactSpeed = LagunaSecaCollisionPhysics.resolve(&a, &b) else { continue }
+                    bodies[i] = a
+                    bodies[j] = b
+                    touched[i] = true
+                    touched[j] = true
+                    if impactSpeed > 1.0 {
+                        struck[i] = true
+                        struck[j] = true
+                    }
                 }
+            }
+        }
+
+        for i in agents.indices where touched[i] {
+            let body = bodies[i]
+            // Split the new velocity into rolling (along the nose) and sliding (the rest)
+            let nose = body.forward
+            let rolling = simd_dot(body.velocity, nose)
+            let slide = body.velocity - nose * rolling
+
+            agents[i].speed = rolling
+            agents[i].bounceVelocity = SIMD3<Float>(slide.x, 0, slide.y)
+            agents[i].spinVelocity = body.spin
+            agents[i].node.position = SCNVector3(
+                SIMD3<Float>(body.position.x, Float(agents[i].node.position.y), body.position.y)
+            )
+
+            if struck[i] {
+                agents[i].impactTimer = 0.6
+                agents[i].outcomeWindow?.collisionEvents += 1
             }
         }
     }

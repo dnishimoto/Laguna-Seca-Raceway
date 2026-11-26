@@ -205,6 +205,11 @@ struct LagunaSecaDriverAI {
 
         let toAim = SIMD2<Float>(aim.x - position.x, aim.z - position.z)
         let rightAxis = SIMD2<Float>(cos(heading), -sin(heading))
+        let forwardAxis = SIMD2<Float>(-sin(heading), -cos(heading))
+        if simd_dot(toAim, forwardAxis) < 0 {
+            // Facing away after a spin: full lock toward the side the road is on
+            return simd_dot(toAim, rightAxis) >= 0 ? 1.0 / 5.2 : -1.0 / 5.2
+        }
         let distanceSq = max(1, simd_length_squared(toAim))
         return 2 * simd_dot(toAim, rightAxis) / distanceSq
     }
