@@ -11,7 +11,7 @@ struct LagunaSecaRacingLine {
         var lateralGrip: Float = 12.0      // m/s² cornering
         var braking: Float = 13.0          // m/s²
         var acceleration: Float = 8.0      // m/s²
-        var topSpeed: Float = 42.0         // m/s (about 94 mph)
+        var topSpeed: Float = 82.0         
         var edgeMargin: Float = 1.6        // m kept between car center and pavement edge
     }
 
