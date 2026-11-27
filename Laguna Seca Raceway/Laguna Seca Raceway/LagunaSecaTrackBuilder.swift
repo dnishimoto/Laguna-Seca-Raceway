@@ -3,6 +3,139 @@ import UIKit
 import simd
 
 
+/// The original, fictional circuits. One is picked at random each time the app launches.
+/// All run clockwise and share the same main straight, so the starting grid and
+/// grandstand fit every layout.
+enum RaceTrack: CaseIterable {
+    case sawtoothRidge
+    case redMesa
+    case cedarBasin
+
+    /// Chosen once per launch. Reset restarts the race on this same track.
+    static let current: RaceTrack = allCases.randomElement() ?? .sawtoothRidge
+
+    var name: String {
+        switch self {
+        case .sawtoothRidge: return "Sawtooth Ridge"
+        case .redMesa: return "Red Mesa"
+        case .cedarBasin: return "Cedar Basin"
+        }
+    }
+
+    /// Lap length in meters. The control points are scaled sideways to match it.
+    var lapLength: Float {
+        switch self {
+        case .sawtoothRidge: return 4200
+        case .redMesa: return 3600
+        case .cedarBasin: return 4600
+        }
+    }
+
+    var groundColor: UIColor {
+        switch self {
+        case .sawtoothRidge: return UIColor(red: 0.24, green: 0.31, blue: 0.19, alpha: 1.0) // olive grass
+        case .redMesa: return UIColor(red: 0.52, green: 0.30, blue: 0.18, alpha: 1.0)       // red desert
+        case .cedarBasin: return UIColor(red: 0.11, green: 0.26, blue: 0.17, alpha: 1.0)    // forest green
+        }
+    }
+
+    /// Centerline points as (x, elevation, z). The first point is the start / finish line.
+    var controlPoints: [SIMD3<Float>] {
+        switch self {
+        case .sawtoothRidge:
+            return [
+                SIMD3<Float>(  0,  0.0,  430),   // Start / Finish line
+                SIMD3<Float>(  0,  0.0,  160),   // Main straight
+                SIMD3<Float>(  0,  1.0, -190),
+                SIMD3<Float>( 35,  2.0, -330),   // North sweeper
+                SIMD3<Float>(150,  4.0, -415),
+                SIMD3<Float>(300,  6.0, -420),
+                SIMD3<Float>(405,  8.0, -335),
+                SIMD3<Float>(385, 10.0, -225),
+                SIMD3<Float>(275, 11.0, -165),   // First infield loop
+                SIMD3<Float>(250, 12.0,  -65),
+                SIMD3<Float>(330, 14.0,   15),
+                SIMD3<Float>(470, 17.0,    5),
+                SIMD3<Float>(590, 19.0, -110),   // High point
+                SIMD3<Float>(740, 18.0, -125),
+                SIMD3<Float>(835, 16.0,  -15),   // East loop
+                SIMD3<Float>(805, 13.0,  120),
+                SIMD3<Float>(680, 11.0,  175),
+                SIMD3<Float>(545, 10.0,  215),   // Second infield loop
+                SIMD3<Float>(500,  9.0,  310),
+                SIMD3<Float>(590,  8.0,  385),
+                SIMD3<Float>(730,  6.0,  415),
+                SIMD3<Float>(775,  5.0,  525),   // Southeast loop
+                SIMD3<Float>(690,  3.0,  625),
+                SIMD3<Float>(520,  2.0,  640),
+                SIMD3<Float>(380,  3.0,  560),   // South esses
+                SIMD3<Float>(250,  2.0,  555),
+                SIMD3<Float>(150,  1.0,  640),
+                SIMD3<Float>( 45,  0.0,  590)    // Final corner onto the main straight
+            ]
+        case .redMesa:
+            return [
+                SIMD3<Float>(   0,  0.0,   430),
+                SIMD3<Float>(   0,  0.0,   160),
+                SIMD3<Float>(   0,  2.0,  -190),
+                SIMD3<Float>(   5,  3.0,  -335),
+                SIMD3<Float>(  70,  5.0,  -425),
+                SIMD3<Float>( 185,  7.0,  -445),
+                SIMD3<Float>( 310,  9.0,  -400),
+                SIMD3<Float>( 440, 11.0,  -440),
+                SIMD3<Float>( 580, 13.0,  -420),
+                SIMD3<Float>( 645, 14.0,  -310),
+                SIMD3<Float>( 570, 15.0,  -215),
+                SIMD3<Float>( 430, 16.0,  -205),
+                SIMD3<Float>( 310, 17.0,  -135),
+                SIMD3<Float>( 300, 16.0,   -15),
+                SIMD3<Float>( 400, 14.0,    65),
+                SIMD3<Float>( 560, 12.0,    55),
+                SIMD3<Float>( 690, 10.0,   115),
+                SIMD3<Float>( 715,  9.0,   255),
+                SIMD3<Float>( 625,  7.0,   355),
+                SIMD3<Float>( 465,  6.0,   335),
+                SIMD3<Float>( 335,  5.0,   385),
+                SIMD3<Float>( 300,  3.0,   505),
+                SIMD3<Float>( 205,  2.0,   595),
+                SIMD3<Float>(  80,  1.0,   600),
+                SIMD3<Float>(  10,  0.0,   535)
+            ]
+        case .cedarBasin:
+            return [
+                SIMD3<Float>(   0,  0.0,   430),
+                SIMD3<Float>(   0,  0.0,   160),
+                SIMD3<Float>(   0,  1.0,  -190),
+                SIMD3<Float>(  10,  2.0,  -355),
+                SIMD3<Float>( 110,  4.0,  -455),
+                SIMD3<Float>( 255,  5.0,  -440),
+                SIMD3<Float>( 330,  7.0,  -330),
+                SIMD3<Float>( 305,  8.0,  -200),
+                SIMD3<Float>( 370,  9.0,   -95),
+                SIMD3<Float>( 500, 11.0,  -110),
+                SIMD3<Float>( 600, 13.0,  -235),
+                SIMD3<Float>( 750, 15.0,  -255),
+                SIMD3<Float>( 860, 14.0,  -150),
+                SIMD3<Float>( 850, 12.0,    10),
+                SIMD3<Float>( 740, 10.0,    95),
+                SIMD3<Float>( 580,  8.0,   115),
+                SIMD3<Float>( 485,  7.0,   200),
+                SIMD3<Float>( 500,  6.0,   325),
+                SIMD3<Float>( 620,  5.0,   420),
+                SIMD3<Float>( 605,  4.0,   545),
+                SIMD3<Float>( 475,  3.0,   600),
+                SIMD3<Float>( 340,  2.0,   525),
+                SIMD3<Float>( 235,  2.0,   425),
+                SIMD3<Float>( 140,  1.0,   445),
+                SIMD3<Float>( 125,  1.0,   560),
+                SIMD3<Float>(  60,  0.0,   615),
+                SIMD3<Float>(   5,  0.0,   550)
+            ]
+        }
+    }
+}
+
+
 final class LagunaSecaTrackBuilder {
 
     struct TrackSpline {
@@ -112,40 +245,9 @@ final class LagunaSecaTrackBuilder {
     /// Asphalt is 14 m wide (half-width = 7.0 m)
     static let trackHalfWidth: Float = 7.0
 
-    /// Sawtooth Ridge Raceway: an original, fictional circuit.
-    /// 4,200 m clockwise lap with three outer loops and gentle hills (19 m of elevation).
-    /// 1 unit = 1 meter. The function name is kept so existing callers do not change.
-    static func makeLagunaSecaSpline() -> TrackSpline {
-        let rawPoints: [SIMD3<Float>] = [
-            SIMD3<Float>(  0,  0.0,  430),   // Start / Finish line
-            SIMD3<Float>(  0,  0.0,  160),   // Main straight
-            SIMD3<Float>(  0,  1.0, -190),
-            SIMD3<Float>( 35,  2.0, -330),   // North sweeper
-            SIMD3<Float>(150,  4.0, -415),
-            SIMD3<Float>(300,  6.0, -420),
-            SIMD3<Float>(405,  8.0, -335),
-            SIMD3<Float>(385, 10.0, -225),
-            SIMD3<Float>(275, 11.0, -165),   // First infield loop
-            SIMD3<Float>(250, 12.0,  -65),
-            SIMD3<Float>(330, 14.0,   15),
-            SIMD3<Float>(470, 17.0,    5),
-            SIMD3<Float>(590, 19.0, -110),   // High point
-            SIMD3<Float>(740, 18.0, -125),
-            SIMD3<Float>(835, 16.0,  -15),   // East loop
-            SIMD3<Float>(805, 13.0,  120),
-            SIMD3<Float>(680, 11.0,  175),
-            SIMD3<Float>(545, 10.0,  215),   // Second infield loop
-            SIMD3<Float>(500,  9.0,  310),
-            SIMD3<Float>(590,  8.0,  385),
-            SIMD3<Float>(730,  6.0,  415),
-            SIMD3<Float>(775,  5.0,  525),   // Southeast loop
-            SIMD3<Float>(690,  3.0,  625),
-            SIMD3<Float>(520,  2.0,  640),
-            SIMD3<Float>(380,  3.0,  560),   // South esses
-            SIMD3<Float>(250,  2.0,  555),
-            SIMD3<Float>(150,  1.0,  640),
-            SIMD3<Float>( 45,  0.0,  590)    // Final corner onto the main straight
-        ]
+    /// Builds the centerline for one of the circuits. 1 unit = 1 meter.
+    static func makeLagunaSecaSpline(for track: RaceTrack) -> TrackSpline {
+        let rawPoints = track.controlPoints
 
         func sampleClosedCatmullRom(_ pts: [SIMD3<Float>], steps: Int) -> [SIMD3<Float>] {
             var result: [SIMD3<Float>] = []
@@ -179,7 +281,7 @@ final class LagunaSecaTrackBuilder {
         }
         rawLength += simd_distance(initialSample.last!, initialSample.first!)
 
-        let targetLength: Float = 4200.0
+        let targetLength = track.lapLength
         let xzScale = rawLength > 1 ? (targetLength / rawLength) : 1.0
         let scaledControlPoints = rawPoints.map {
             SIMD3<Float>($0.x * xzScale, $0.y, $0.z * xzScale)
@@ -204,14 +306,14 @@ final class LagunaSecaTrackBuilder {
         )
     }
 
-    static func buildTrack(in scene: SCNScene, spline: TrackSpline) {
+    static func buildTrack(in scene: SCNScene, spline: TrackSpline, track: RaceTrack) {
         let trackRoot = SCNNode()
         trackRoot.name = "RaceTrackRoot"
 
         let ground = SCNFloor()
         ground.reflectivity = 0.04
         let groundMat = SCNMaterial()
-        groundMat.diffuse.contents = UIColor(red: 0.24, green: 0.31, blue: 0.19, alpha: 1.0)
+        groundMat.diffuse.contents = track.groundColor
         ground.materials = [groundMat]
         let groundNode = SCNNode(geometry: ground)
         groundNode.name = "TrackGround"
@@ -318,7 +420,7 @@ final class LagunaSecaTrackBuilder {
         trackRoot.addChildNode(gantry)
 
         buildGuideFeatures(in: trackRoot, spline: spline)
-        LagunaSecaGrandstand.add(to: trackRoot, spline: spline)
+        LagunaSecaGrandstand.add(to: trackRoot, spline: spline, trackName: track.name)
 
         scene.rootNode.addChildNode(trackRoot)
     }

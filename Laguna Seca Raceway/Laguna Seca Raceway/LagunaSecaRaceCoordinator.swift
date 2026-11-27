@@ -105,11 +105,7 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
             ("ca-2",   "CA Racer #2",      .caAgent,           80.0, -2.2, UIColor.systemGreen, UIColor.white, 2),
             ("ca-3",   "CA Racer #3",      .caAgent,           76.0,  2.2, UIColor.systemOrange, UIColor.black, 3),
             ("ca-4",   "CA Racer #4",      .caAgent,           72.0, -2.2, UIColor.systemPurple, UIColor.green, 4),
-            ("ca-5",   "CA Racer #5",      .caAgent,           68.0,  2.2, UIColor.systemPink, UIColor.white, 5),
-            ("ca-6",   "CA Racer #6",      .caAgent,           64.0, -2.2, UIColor.systemTeal, UIColor.yellow, 6),
-            ("ca-7",   "CA Racer #7",      .caAgent,           60.0,  2.2, UIColor.systemIndigo, UIColor.orange, 7),
-            ("ca-8",   "CA Racer #8",      .caAgent,           56.0, -2.2, UIColor.systemBrown, UIColor.white, 8),
-            ("ca-9",   "CA Racer #9",      .caAgent,           52.0,  2.2, UIColor.systemMint, UIColor.black, 9)
+            ("ca-5",   "CA Racer #5",      .caAgent,           68.0,  2.2, UIColor.systemPink, UIColor.white, 5)
          
         ]
 
@@ -428,9 +424,12 @@ final class LagunaSecaRaceCoordinator: NSObject, SCNSceneRendererDelegate {
                 shapedSteer = sign * expo
             }
 
-            let targetWheelAngle = shapedSteer * maxLockWheelAngleRad
+            // Speed-sensitive steering: full lock when stopped, 45% of it at top speed
+            let steerSpeedRatio = min(1.0, abs(agent.speed) / 68.0)
+            let speedSteerScale: Float = 1.0 - 0.55 * steerSpeedRatio
+            let targetWheelAngle = shapedSteer * maxLockWheelAngleRad * speedSteerScale
             let isUnwinding = abs(targetWheelAngle) < abs(agent.steeringAngle) || (targetWheelAngle * agent.steeringAngle < 0)
-            let steerLerpRate: Float = isUnwinding ? 14.5 : 8.0
+            let steerLerpRate: Float = isUnwinding ? 10.0 : 5.5
             agent.steeringAngle += (targetWheelAngle - agent.steeringAngle) * min(1, dt * steerLerpRate)
 
             let throttleAmount = max(0, min(1, thumbInput.rightThumbThrottle))

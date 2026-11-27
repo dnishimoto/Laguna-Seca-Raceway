@@ -66,7 +66,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("SAWTOOTH RIDGE • 1ST PERSON CA RACE")
+                        Text("\(RaceTrack.current.name.uppercased()) • 1ST PERSON CA RACE")
                             .font(.caption.bold())
                             .foregroundStyle(.white)
                         ForEach(telemetry) { car in
@@ -123,7 +123,7 @@ struct ContentView: View {
 
                 HStack(alignment: .bottom) {
                     VStack(spacing: 8) {
-                        SpeedSliderView(throttle: $thumbInput.rightThumbThrottle)
+                        SpeedButtonsView(throttle: $thumbInput.rightThumbThrottle)
 
                         Text("BRAKE")
                             .font(.caption.bold())

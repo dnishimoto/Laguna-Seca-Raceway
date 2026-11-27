@@ -32,8 +32,9 @@ struct LagunaSecaRaceSceneRepresentable: UIViewRepresentable {
         let scene = SCNScene()
         scene.background.contents = UIColor(red: 0.55, green: 0.74, blue: 0.92, alpha: 1.0)
 
-        let spline = LagunaSecaTrackBuilder.makeLagunaSecaSpline()
-        LagunaSecaTrackBuilder.buildTrack(in: scene, spline: spline)
+        let track = RaceTrack.current
+        let spline = LagunaSecaTrackBuilder.makeLagunaSecaSpline(for: track)
+        LagunaSecaTrackBuilder.buildTrack(in: scene, spline: spline, track: track)
 
         let ambient = SCNNode()
         let ambientLight = SCNLight()

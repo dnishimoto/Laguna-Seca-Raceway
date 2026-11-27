@@ -25,7 +25,7 @@ enum LagunaSecaGrandstand {
     private static let sections = 12
     private static let groupsPerSection = 3
 
-    static func add(to parent: SCNNode, spline: LagunaSecaTrackBuilder.TrackSpline) {
+    static func add(to parent: SCNNode, spline: LagunaSecaTrackBuilder.TrackSpline, trackName: String) {
         let frame = spline.frame(atDistance: centerDistance)
 
         // Local axes: +x points away from the track on the right, -z is race direction
@@ -34,7 +34,7 @@ enum LagunaSecaGrandstand {
         stand.position = SCNVector3(frame.position.x, -0.35, frame.position.z)
         stand.eulerAngles = SCNVector3(0, atan2(-frame.forward.x, -frame.forward.z), 0)
 
-        addStructure(to: stand)
+        addStructure(to: stand, trackName: trackName)
         addCrowd(to: stand)
         addFlags(to: stand)
 
@@ -63,7 +63,7 @@ enum LagunaSecaGrandstand {
 
     // MARK: - Stand, roof and banner
 
-    private static func addStructure(to stand: SCNNode) {
+    private static func addStructure(to stand: SCNNode, trackName: String) {
         let concrete = material(UIColor(white: 0.62, alpha: 1))
         let darkConcrete = material(UIColor(white: 0.48, alpha: 1))
         let steel = material(UIColor(white: 0.30, alpha: 1))
@@ -94,7 +94,7 @@ enum LagunaSecaGrandstand {
         let banner = SCNPlane(width: 36, height: 2.2)
         let bannerMaterial = SCNMaterial()
         bannerMaterial.lightingModel = .constant
-        bannerMaterial.diffuse.contents = bannerImage()
+        bannerMaterial.diffuse.contents = bannerImage(trackName: trackName)
         banner.materials = [bannerMaterial]
         let bannerNode = SCNNode(geometry: banner)
         bannerNode.position = SCNVector3(frontLateral - 0.65, roofHeight + 1.25, 0)
@@ -102,7 +102,7 @@ enum LagunaSecaGrandstand {
         stand.addChildNode(bannerNode)
     }
 
-    private static func bannerImage() -> UIImage {
+    private static func bannerImage(trackName: String) -> UIImage {
         let size = CGSize(width: 1152, height: 70)
         return UIGraphicsImageRenderer(size: size).image { context in
             UIColor(red: 0.05, green: 0.08, blue: 0.20, alpha: 1).setFill()
@@ -115,7 +115,7 @@ enum LagunaSecaGrandstand {
                 .foregroundColor: UIColor.systemYellow,
                 .paragraphStyle: style
             ]
-            ("SAWTOOTH RIDGE FAN ZONE" as NSString)
+            ("\(trackName.uppercased()) FAN ZONE" as NSString)
                 .draw(in: CGRect(x: 0, y: 6, width: size.width, height: 60), withAttributes: attributes)
         }
     }

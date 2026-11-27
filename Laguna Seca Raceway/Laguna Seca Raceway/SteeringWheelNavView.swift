@@ -1,3 +1,9 @@
+
+
+import Foundation
+import SwiftUI
+import SceneKit
+
 //
 //  File.swift
 //  Laguna Seca Raceway
@@ -12,7 +18,7 @@ import SceneKit
 struct SteeringWheelNavView: View {
     @Binding var wheelSteer: Float // -1.0 left ... +1.0 right
 
-    private let maxDragWidth: CGFloat = 68
+    private let maxDragWidth: CGFloat = 100
     // Sports-car rack: ~2.28 turns lock-to-lock (±410 degrees)
     private let maxWheelDegrees: Double = 410.0
 
@@ -70,69 +76,48 @@ struct SteeringWheelNavView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
-struct SpeedSliderView: View {
+struct SpeedButtonsView: View {
     @Binding var throttle: Float // 0.0 (zero speed) ... 1.0 (max speed)
 
-    private let trackHeight: CGFloat = 136
+    private let stepCount: Float = 10 // each press changes the set speed by 10% (about 15 MPH)
     private let baseMaxSpeedMps: Float = 68.0 // matches the player's top speed
 
     private var clampedThrottle: Float {
         max(0, min(1, throttle))
     }
 
-    private var thumbOffsetY: CGFloat {
-        // Top of track = 1.0 (max speed), bottom of track = 0.0 (zero)
-        let span = trackHeight - 32
-        return CGFloat(1.0 - clampedThrottle) * span - (span * 0.5)
-    }
-
     var body: some View {
-        VStack(spacing: 6) {
-            Text("MAX")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.green)
+        VStack(spacing: 8) {
+            speedButton(systemName: "plus", label: "Increase speed", color: .green, delta: 1)
+                .disabled(clampedThrottle >= 1)
 
-            ZStack(alignment: .bottom) {
-                Capsule()
-                    .fill(.white.opacity(0.18))
-                    .frame(width: 12, height: trackHeight)
-
-                Capsule()
-                    .fill(.green.opacity(0.8))
-                    .frame(width: 12, height: max(8, CGFloat(clampedThrottle) * trackHeight))
-
-                Circle()
-                    .fill(.green)
-                    .frame(width: 32, height: 32)
-                    .shadow(radius: 4)
-                    .offset(y: thumbOffsetY)
-            }
-            .frame(width: 56, height: trackHeight + 24)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let span = max(1, trackHeight - 32)
-                        let topY = -(span * 0.5)
-                        let bottomY = span * 0.5
-                        let localY = max(topY, min(bottomY, value.location.y - ((trackHeight + 24) * 0.5)))
-                        let ratio = Float((bottomY - localY) / span)
-                        throttle = max(0, min(1, ratio))
-                    }
-                    // Intentionally no snap-back in onEnded so speed holds at chosen level
-            )
-
-            Text("0")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.8))
-
-            Text("\(Int((clampedThrottle * baseMaxSpeedMps * 2.23694).rounded())) MPH")
+            Text("SET \(Int((clampedThrottle * baseMaxSpeedMps * 2.23694).rounded())) MPH")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
+
+            speedButton(systemName: "minus", label: "Decrease speed", color: .orange, delta: -1)
+                .disabled(clampedThrottle <= 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(.black.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func speedButton(systemName: String, label: String, color: Color, delta: Float) -> some View {
+        Button {
+            // Work in whole steps so repeated presses land exactly on 0 and max
+            let step = (clampedThrottle * stepCount).rounded() + delta
+            throttle = max(0, min(1, step / stepCount))
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 64, height: 52)
+                .background(color.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonRepeatBehavior(.enabled) // press and hold to keep changing speed
+        .accessibilityLabel(label)
     }
 }
